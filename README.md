@@ -55,17 +55,15 @@ from vyvotts.audio_tokenizer import process_dataset
 process_dataset(
     original_dataset="MrDragonFox/Elise",
     output_dataset="username/dataset-name",
-    tokenizer_model="Qwen/Qwen2.5-0.5B-Instruct",
-    config_path="vyvotts/configs/inference/qwen3.yaml",
-    text_field="text_scribe"
+    model_type="qwen3",
+    text_field="text"
 )
 
 # For LFM2
 process_dataset(
     original_dataset="MrDragonFox/Elise",
     output_dataset="username/dataset-name",
-    tokenizer_model="your-tokenizer-model",
-    config_path="vyvotts/configs/inference/lfm2.yaml",
+    model_type="lfm2",
     text_field="text"
 )
 ```
@@ -73,8 +71,7 @@ process_dataset(
 **Parameters:**
 - `original_dataset`: HuggingFace dataset path to process
 - `output_dataset`: Output dataset path on HuggingFace Hub
-- `tokenizer_model`: Text tokenizer model name
-- `config_path`: Path to YAML config file with token definitions
+- `model_type`: Model type - either "qwen3" or "lfm2" (default: "qwen3")
 - `text_field`: Name of text field in dataset (e.g., "text_scribe", "text")
 
 ### Training

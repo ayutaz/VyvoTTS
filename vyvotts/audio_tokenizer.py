@@ -110,8 +110,7 @@ def remove_duplicate_frames(codes_list):
 def process_dataset(
     original_dataset,
     output_dataset,
-    tokenizer_model,
-    config_path,
+    model_type="qwen3",
     text_field="text_scribe",
     target_sample_rate=24000
 ):
@@ -121,11 +120,20 @@ def process_dataset(
     Args:
         original_dataset: HuggingFace dataset path to process
         output_dataset: HuggingFace dataset path for output
-        tokenizer_model: Text tokenizer model name
-        config_path: Path to YAML config file with token definitions
+        model_type: Model type - either "qwen3" or "lfm2" (default: "qwen3")
         text_field: Name of text field in dataset (default: "text_scribe")
         target_sample_rate: Target audio sample rate (default: 24000)
     """
+    # Set tokenizer and config based on model type
+    if model_type == "qwen3":
+        tokenizer_model = "Qwen/Qwen3-0.6B"
+        config_path = "vyvotts/configs/inference/qwen3.yaml"
+    elif model_type == "lfm2":
+        tokenizer_model = "LiquidAI/LFM2-350M"
+        config_path = "vyvotts/configs/inference/lfm2.yaml"
+    else:
+        raise ValueError(f"Invalid model_type: {model_type}. Must be 'qwen3' or 'lfm2'")
+
     # Load configuration
     print(f"Loading config from: {config_path}")
     config = load_config(config_path)
