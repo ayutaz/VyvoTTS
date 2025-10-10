@@ -42,6 +42,41 @@ uv pip install -r requirements.txt
 
 ## 🚀 Quick Start
 
+### Dataset Preparation
+
+VyvoTTS provides a unified tokenizer that works with both Qwen3 and LFM2 models. The tokenizer reads configuration from YAML files for flexibility.
+
+#### Tokenizer Usage
+
+```python
+from vyvotts.audio_tokenizer import process_dataset
+
+# For Qwen3
+process_dataset(
+    original_dataset="MrDragonFox/Elise",
+    output_dataset="username/dataset-name",
+    tokenizer_model="Qwen/Qwen2.5-0.5B-Instruct",
+    config_path="vyvotts/configs/inference/qwen3.yaml",
+    text_field="text_scribe"
+)
+
+# For LFM2
+process_dataset(
+    original_dataset="MrDragonFox/Elise",
+    output_dataset="username/dataset-name",
+    tokenizer_model="your-tokenizer-model",
+    config_path="vyvotts/configs/inference/lfm2.yaml",
+    text_field="text"
+)
+```
+
+**Parameters:**
+- `original_dataset`: HuggingFace dataset path to process
+- `output_dataset`: Output dataset path on HuggingFace Hub
+- `tokenizer_model`: Text tokenizer model name
+- `config_path`: Path to YAML config file with token definitions
+- `text_field`: Name of text field in dataset (e.g., "text_scribe", "text")
+
 ### Training
 
 #### Fine-tuning
