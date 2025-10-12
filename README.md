@@ -68,12 +68,6 @@ process_dataset(
 )
 ```
 
-**Parameters:**
-- `original_dataset`: HuggingFace dataset path to process
-- `output_dataset`: Output dataset path on HuggingFace Hub
-- `model_type`: Model type - either "qwen3" or "lfm2" (default: "qwen3")
-- `text_field`: Name of text field in dataset (e.g., "text_scribe", "text")
-
 ### Training
 
 #### Fine-tuning
@@ -107,7 +101,6 @@ Standard inference using HuggingFace Transformers with full precision.
 
 ```python
 from vyvotts.inference.transformers_inference import VyvoTTSTransformersInference
-import soundfile as sf
 
 # Initialize engine
 engine = VyvoTTSTransformersInference(
@@ -118,15 +111,11 @@ engine = VyvoTTSTransformersInference(
 audio, timing_info = engine.generate(
     text="Hello, this is a test of the text to speech system.",
     voice=None,  # Optional: specify voice name
+    output_path="output.wav",  # Optional: save directly to file
     max_new_tokens=1200,
     temperature=0.6,
     top_p=0.95
 )
-
-# Save audio
-if audio is not None:
-    audio_numpy = audio.detach().squeeze().cpu().numpy()
-    sf.write("output.wav", audio_numpy, 24000)
 ```
 
 #### 2. Unsloth Inference (Memory Efficient)
@@ -138,19 +127,18 @@ from vyvotts.inference.unsloth_inference import VyvoTTSUnslothInference
 # Initialize engine with 4-bit quantization
 engine = VyvoTTSUnslothInference(
     model_name="Vyvo/VyvoTTS-v2-Neuvillette",
-    load_in_4bit=True  # Use 4-bit quantization for lower memory
+    load_in_4bit=False,  # Use 4-bit quantization for lower memory
+    load_in_8bit=False,
 )
 
 # Generate and save audio
 audio = engine.generate(
     text="Hey there, my name is Elise.",
     voice=None,
+    output_path="output.wav",  # Optional: save directly to file
     max_new_tokens=1200,
-    temperature=0.6
+    temperature=0.7
 )
-
-if audio is not None:
-    engine.save_audio(audio, "output.wav")
 ```
 
 #### 3. HQQ Quantized Inference (4-bit)
@@ -162,7 +150,7 @@ from vyvotts.inference.transformers_hqq_inference import VyvoTTSHQQInference
 # Initialize engine with HQQ quantization
 engine = VyvoTTSHQQInference(
     model_name="Vyvo/VyvoTTS-LFM2-Neuvillette",
-    nbits=4,  # 4-bit quantization
+    nbits=8,  # 8/4/2/1-bit quantization
     group_size=64
 )
 
@@ -170,11 +158,10 @@ engine = VyvoTTSHQQInference(
 audio, timing_info = engine.generate(
     text="Hello world, this is HQQ inference.",
     voice=None,
+    output_path="output.wav",  # Optional: save directly to file
     max_new_tokens=1200,
     temperature=0.6
 )
-
-print(f"Generation time: {timing_info['generation_time']:.2f}s")
 ```
 
 #### 4. vLLM Inference (Fastest)
@@ -191,13 +178,9 @@ engine = VyvoTTSInference(
 # Generate speech
 audio = engine.generate(
     text="Hello world, this is vLLM inference.",
-    voice="zoe"  # Optional voice identifier
+    voice="zoe",  # Optional voice identifier
+    output_path="output.wav"  # Optional: save directly to file
 )
-
-if audio is not None:
-    import soundfile as sf
-    audio_numpy = audio.detach().squeeze().cpu().numpy()
-    sf.write("output.wav", audio_numpy, 24000)
 ```
 
 ## 👨‍🍳 Roadmap

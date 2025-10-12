@@ -136,13 +136,14 @@ class VyvoTTSInference:
         # Decode to audio
         return [self._redistribute_codes(code_list) for code_list in code_lists]
 
-    def generate(self, text: str, voice: Optional[str] = None) -> torch.Tensor:
+    def generate(self, text: str, voice: Optional[str] = None, output_path: Optional[str] = None) -> torch.Tensor:
         """Generate speech from text input.
-        
+
         Args:
             text: Input text to convert to speech
             voice: Optional voice identifier
-            
+            output_path: Optional path to save audio file
+
         Returns:
             Audio tensor containing the generated speech
         """
@@ -177,7 +178,39 @@ class VyvoTTSInference:
 
         # Convert generated tokens into audio
         audio_samples = self.parse_tokens_to_audio(generated_ids)
-        return audio_samples[0] if audio_samples else None
+        audio = audio_samples[0] if audio_samples else None
+
+        # Save audio if output path provided
+        if output_path and audio is not None:
+            self.save_audio(audio, output_path)
+
+        return audio
+
+    def save_audio(
+        self,
+        audio_tensor: torch.Tensor,
+        output_path: str,
+        sample_rate: int = 24000
+    ) -> None:
+        """Save audio tensor to file.
+
+        Args:
+            audio_tensor: Audio tensor to save
+            output_path: Path to save the audio file
+            sample_rate: Sample rate for the audio (defaults to 24000)
+        """
+        import soundfile as sf
+        from pathlib import Path
+
+        if audio_tensor is None:
+            raise ValueError("No audio tensor provided")
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Convert to numpy and save
+        audio_numpy = audio_tensor.detach().squeeze().cpu().numpy()
+        sf.write(output_path, audio_numpy, sample_rate)
 
 def text_to_speech(prompt, voice=None, config_path=None):
     """

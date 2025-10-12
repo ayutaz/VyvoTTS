@@ -239,7 +239,7 @@ class VyvoTTSHQQInference:
     def generate(self, text: str, voice: Optional[str] = None,
                 do_sample: bool = True, max_new_tokens: int = 1200,
                 temperature: float = 0.6, top_p: float = 0.95,
-                repetition_penalty: float = 1.1) -> Tuple[torch.Tensor, Dict[str, float]]:
+                repetition_penalty: float = 1.1, output_path: Optional[str] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Generate speech from text input.
 
         Args:
@@ -250,6 +250,7 @@ class VyvoTTSHQQInference:
             temperature: Sampling temperature
             top_p: Top-p sampling parameter
             repetition_penalty: Penalty for token repetition
+            output_path: Optional path to save audio file
 
         Returns:
             Audio tensor and timing information dictionary
@@ -283,7 +284,39 @@ class VyvoTTSHQQInference:
             'total_time': total_time
         }
 
-        return audio_samples[0] if audio_samples else None, timing_info
+        audio = audio_samples[0] if audio_samples else None
+
+        # Save audio if output path provided
+        if output_path and audio is not None:
+            self.save_audio(audio, output_path)
+
+        return audio, timing_info
+
+    def save_audio(
+        self,
+        audio_tensor: torch.Tensor,
+        output_path: str,
+        sample_rate: int = 24000
+    ) -> None:
+        """Save audio tensor to file.
+
+        Args:
+            audio_tensor: Audio tensor to save
+            output_path: Path to save the audio file
+            sample_rate: Sample rate for the audio (defaults to 24000)
+        """
+        import soundfile as sf
+        from pathlib import Path
+
+        if audio_tensor is None:
+            raise ValueError("No audio tensor provided")
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Convert to numpy and save
+        audio_numpy = audio_tensor.detach().squeeze().cpu().numpy()
+        sf.write(output_path, audio_numpy, sample_rate)
 
 
 def main():
