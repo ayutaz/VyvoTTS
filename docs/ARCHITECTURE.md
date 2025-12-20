@@ -144,6 +144,84 @@ audio = cloner.clone_voice(
 | 計算コスト | 自己回帰生成は遅い | 軽量モデル + 量子化 |
 | 多言語対応 | 訓練データに依存 | 現在は英語のみ |
 
+## Orpheus TTSからの改善・変更点
+
+VyvoTTSは[Orpheus TTS](https://github.com/canopyai/orpheus-tts)をベースに開発されていますが、以下の改善・変更が行われています。
+
+### 1. モデルサイズの大幅な縮小
+
+| 項目 | Orpheus TTS | VyvoTTS |
+|------|-------------|---------|
+| ベースモデル | Llama-3.2-3B | LFM2-350M / Qwen3-600M |
+| パラメータ数 | **3B** | **350M〜600M**（5〜10倍小さい） |
+
+### 2. 推論エンジンの多様化
+
+Orpheus TTSはvLLMのみ対応ですが、VyvoTTSは用途に応じて4種類のエンジンを選択可能：
+
+| エンジン | 特徴 |
+|----------|------|
+| **Transformers** | 標準、Flash Attention対応 |
+| **vLLM** | 最速（Linux専用） |
+| **Unsloth** | 4bit/8bit量子化、省メモリ |
+| **HQQ** | 高品質量子化（1-8bit） |
+
+### 3. 低VRAM環境対応
+
+Orpheus TTSは3Bモデルのため高VRAMが必要ですが、VyvoTTSは量子化により**6GB+ VRAMから動作可能**です。
+
+### 4. GradualRatioDataset（段階的学習）
+
+VyvoTTS独自の訓練機構として、プリトレーニング時にテキストQAデータと音声データの比率を段階的に変更する`GradualRatioDataset`を実装しています。
+
+```python
+# vyvotts/train/pretrain/train.py
+class GradualRatioDataset(Dataset):
+    # 訓練進行に伴い、テキスト:音声比率を段階的に変更
+    # 初期: 2:1 → 終了: 1:1
+```
+
+### 5. 完全な訓練フレームワークの提供
+
+Orpheus TTSは訓練コードを公開していませんが、VyvoTTSは以下を含む完全な訓練パイプラインを提供：
+
+- プリトレーニング（FSDP対応）
+- ファインチューニング
+- Liger Kernel統合（最適化）
+- データセット準備ツール（`audio_tokenizer.py`）
+
+### 6. YAML設定による柔軟な管理
+
+```
+vyvotts/configs/
+├── inference/
+│   ├── lfm2.yaml    # LFM2用トークン定義
+│   ├── qwen3.yaml   # Qwen3用トークン定義
+│   └── llama3.yaml  # Llama3用トークン定義
+└── train/
+    ├── lfm2_ft.yaml      # ファインチューン設定
+    └── lfm2_pretrain.yaml # プリトレーン設定
+```
+
+### 機能比較まとめ
+
+| 機能 | Orpheus | VyvoTTS | 備考 |
+|------|---------|---------|------|
+| ゼロショット音声クローニング | ✅ | ✅ | 同等 |
+| 感情タグ | ✅ `<laugh>` 等 | ❓ | Orpheus優位 |
+| 多言語対応 | ✅ 研究版 | ❌ 英語のみ | Orpheus優位 |
+| 訓練コード | ❌ | ✅ | VyvoTTS優位 |
+| 低VRAM対応 | ❌ | ✅ 6GB+ | VyvoTTS優位 |
+| 複数推論エンジン | ❌ | ✅ 4種 | VyvoTTS優位 |
+| 軽量モデル | ❌ 3B | ✅ 350M | VyvoTTS優位 |
+
+### アーキテクチャ的新規性について
+
+VyvoTTSはOrpheus TTSの**実装改良版**であり、コアアーキテクチャ（LLM + SNACコーデック）は継承しています。
+
+- **研究的新規性**: 限定的（GradualRatioDatasetはCurriculum Learningの応用）
+- **実用的価値**: 高い（軽量化、低VRAM対応、訓練フレームワーク提供）
+
 ## 制限事項
 
 - **対応言語**: 英語のみ（訓練データセットが英語）
