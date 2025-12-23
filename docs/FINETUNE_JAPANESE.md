@@ -147,7 +147,14 @@ process_dataset(
 
 ### 4.1 設定ファイルの作成
 
-`vyvotts/configs/train/lfm2_ft_japanese.yaml`を作成：
+既存の設定ファイルをコピーして日本語用に編集します：
+
+```bash
+# 既存ファイルをコピー
+cp vyvotts/configs/train/lfm2_ft.yaml vyvotts/configs/train/lfm2_ft_japanese.yaml
+```
+
+`vyvotts/configs/train/lfm2_ft_japanese.yaml`を以下のように編集：
 
 ```yaml
 # 日本語データセット（トークン化済み）
@@ -158,7 +165,7 @@ model_name: "Vyvo/VyvoTTS-LFM2-350M-PT"
 
 # Training Args
 epochs: 3
-batch_size: 8  # VRAMに応じて調整
+batch_size: 8  # VRAMに応じて調整（下記参照）
 number_processes: 1
 pad_token: 64407
 save_steps: 1000
@@ -169,6 +176,8 @@ save_folder: "checkpoints-japanese"
 project_name: "vyvotts-japanese"
 run_name: "jsut-finetune"
 ```
+
+**重要**: 学習スクリプト実行前に、`train.py`内の設定ファイルパスを更新するか、環境変数で指定してください。
 
 ### 4.2 GPU別の推奨設定
 
@@ -213,48 +222,46 @@ wandb login
 
 ## 6. 推論テスト
 
-### 6.1 学習済みモデルでの推論
+### 6.1 学習済みモデルでの推論（推奨）
+
+既存の推論クラスを使用する方法（シンプル）：
+
+```python
+from vyvotts.inference.transformers_inference import VyvoTTSTransformersInference
+
+# 学習済みモデルで推論エンジンを初期化
+engine = VyvoTTSTransformersInference(
+    model_name="./checkpoints-japanese"  # または HuggingFaceのパス
+)
+
+# 日本語テキストで推論
+audio, timing = engine.generate(
+    text="こんにちは、これはテストです。",
+    output_path="output_japanese.wav"
+)
+
+print(f"推論完了: {timing['total_time']:.2f}秒")
+print(f"音声ファイル: output_japanese.wav")
+```
+
+### 6.2 手動での推論（詳細制御が必要な場合）
 
 ```python
 import torch
-import soundfile as sf
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from snac import SNAC
 
 # モデルの読み込み
-model_path = "./checkpoints-japanese"  # または HuggingFaceのパス
+model_path = "./checkpoints-japanese"
 model = AutoModelForCausalLM.from_pretrained(
     model_path,
     torch_dtype=torch.bfloat16,
     device_map="auto"
 )
 tokenizer = AutoTokenizer.from_pretrained("LiquidAI/LFM2-350M")
-
-# SNACデコーダー
 snac = SNAC.from_pretrained("hubertsiuzdak/snac_24khz").to("cuda")
 
-# 日本語テキストで推論
-text = "こんにちは、これはテストです。"
-
-# プロンプト構築
-prompt = f"<|START_OF_HUMAN|>{text}<|END_OF_TEXT|><|END_OF_HUMAN|><|START_OF_AI|><|START_OF_SPEECH|>"
-input_ids = tokenizer.encode(prompt, return_tensors="pt").to("cuda")
-
-# 生成
-with torch.no_grad():
-    output = model.generate(
-        input_ids,
-        max_new_tokens=1200,
-        temperature=0.6,
-        top_p=0.95,
-        do_sample=True
-    )
-
-# 音声デコード（実装は推論スクリプト参照）
-# audio = decode_audio(output, snac)
-# sf.write("output_japanese.wav", audio, 24000)
-
-print("推論完了")
+# 詳細な推論実装については vyvotts/inference/transformers_inference.py を参照
 ```
 
 ---
