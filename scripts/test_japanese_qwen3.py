@@ -1,11 +1,11 @@
 """
-日本語TTSモデル推論テストスクリプト
+日本語TTSモデル推論テストスクリプト (Qwen3版)
 
-トレーニング済みの日本語モデルで音声生成テストを実行します。
+Qwen3ベースの日本語モデルで音声生成テストを実行します。
 
 使用方法:
-    uv run python scripts/test_japanese_inference.py
-    uv run python scripts/test_japanese_inference.py --temperature 0.5 --repetition_penalty 1.2
+    uv run python scripts/test_japanese_qwen3.py
+    uv run python scripts/test_japanese_qwen3.py --model ./checkpoints-qwen3-japanese --temperature 0.5
 """
 
 from snac import SNAC
@@ -15,6 +15,8 @@ from typing import List, Tuple, Optional, Dict, Any
 import yaml
 import time
 import argparse
+import re
+import unicodedata
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -24,12 +26,23 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
-class JapaneseInference:
-    """日本語TTS推論エンジン（Flash Attention 2使用）"""
+def normalize_japanese_text(text: str) -> str:
+    """
+    日本語テキストを正規化する。
+    """
+    text = unicodedata.normalize('NFKC', text)
+    text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    return text
 
-    def __init__(self, model_name: str = "./checkpoints-japanese", device: str = "cuda"):
-        # Load configuration
-        self.config = load_config("vyvotts/configs/inference/lfm2.yaml")
+
+class Qwen3JapaneseInference:
+    """日本語TTS推論エンジン (Qwen3版)"""
+
+    def __init__(self, model_name: str = "./checkpoints-qwen3-japanese", device: str = "cuda"):
+        # Load Qwen3 configuration
+        self.config = load_config("vyvotts/configs/inference/qwen3.yaml")
 
         # Set token constants from config
         self.TOKENIZER_LENGTH = self.config['TOKENIZER_LENGTH']
@@ -57,12 +70,14 @@ class JapaneseInference:
             attn_implementation="flash_attention_2",
             device_map="auto",
         )
-        # Use base model tokenizer (checkpoints may not include tokenizer)
-        self.tokenizer = AutoTokenizer.from_pretrained("LiquidAI/LFM2-350M")
+        # Use base Qwen3 tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
 
     def _preprocess_prompts(self, prompts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
         all_input_ids = []
         for prompt in prompts:
+            # Normalize Japanese text
+            prompt = normalize_japanese_text(prompt)
             input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids
             all_input_ids.append(input_ids)
 
@@ -188,8 +203,8 @@ class JapaneseInference:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="日本語TTS推論テスト")
-    parser.add_argument("--model", type=str, default="./checkpoints-japanese",
+    parser = argparse.ArgumentParser(description="日本語TTS推論テスト (Qwen3)")
+    parser.add_argument("--model", type=str, default="./checkpoints-qwen3-japanese",
                         help="モデルのパス")
     parser.add_argument("--temperature", type=float, default=0.5,
                         help="サンプリング温度（低いほど安定、デフォルト: 0.5）")
@@ -197,7 +212,7 @@ def main():
                         help="Top-pサンプリング（デフォルト: 0.9）")
     parser.add_argument("--repetition_penalty", type=float, default=1.2,
                         help="繰り返しペナルティ（デフォルト: 1.2）")
-    parser.add_argument("--output_prefix", type=str, default="output_jp",
+    parser.add_argument("--output_prefix", type=str, default="output_qwen3_jp",
                         help="出力ファイル名のプレフィックス")
     parser.add_argument("--text", type=str, default=None,
                         help="生成するテキスト（指定しない場合はデフォルトテキストを使用）")
@@ -205,7 +220,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 50)
-    print("日本語TTSモデル推論テスト")
+    print("日本語TTSモデル推論テスト (Qwen3)")
     print("=" * 50)
     print(f"モデル: {args.model}")
     print(f"Temperature: {args.temperature}")
@@ -213,9 +228,9 @@ def main():
     print(f"Repetition Penalty: {args.repetition_penalty}")
     print("=" * 50)
 
-    # ローカルチェックポイントを使用（Flash Attention 2）
+    # ローカルチェックポイントを使用
     print("\nモデルを読み込み中...")
-    engine = JapaneseInference(
+    engine = Qwen3JapaneseInference(
         model_name=args.model,
         device="cuda"
     )

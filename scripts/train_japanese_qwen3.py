@@ -1,38 +1,39 @@
 """
-日本語ファインチューニングスクリプト
+日本語ファインチューニングスクリプト (Qwen3版)
 
-ローカルのトークン化済みデータセットを使用してファインチューニングを実行します。
+Qwen3モデルを使用した日本語TTSファインチューニング。
+Qwen3はvocab size 151,669で日本語トークン効率が向上。
 
 使用方法:
-    uv run python scripts/train_japanese.py
+    uv run python scripts/train_japanese_qwen3.py
+    uv run python scripts/train_japanese_qwen3.py --dataset_path ./moe_tokenized_qwen3 --epochs 3
 """
 
 from datasets import load_from_disk
-from transformers import Trainer, TrainingArguments, AutoTokenizer
-from transformers.models.lfm2 import Lfm2ForCausalLM
+from transformers import Trainer, TrainingArguments, AutoTokenizer, AutoModelForCausalLM
 import torch
 import wandb
 import argparse
 
-# デフォルト設定（v2: 最適化済み）
+# Qwen3用デフォルト設定
 DEFAULT_CONFIG = {
-    "dataset_path": "./jsut_tokenized",
-    "model_name": "Vyvo/VyvoTTS-LFM2-Neuvillette",
-    "epochs": 2,                    # 3 → 2（過学習回避）
-    "batch_size": 16,               # 8 → 16（RTX 4090で余裕あり）
-    "learning_rate": 5e-5,
-    "save_steps": 500,              # 1000 → 500（細かくチェックポイント）
-    "warmup_steps": 500,            # 100 → 500（小規模データで安定化）
-    "gradient_accumulation": 2,     # 新規追加（実効バッチサイズ32）
-    "pad_token": 64407,
-    "save_folder": "checkpoints-japanese-v2",
-    "project_name": "vyvotts-japanese",
-    "run_name": "moe-top20-finetune-v2",
+    "dataset_path": "./moe_tokenized_qwen3",
+    "model_name": "Vyvo/VyvoTTS-Qwen3-0.6B-PT",
+    "epochs": 3,
+    "batch_size": 8,                # Qwen3は大きいのでbatch size小さめ
+    "learning_rate": 1e-5,          # より保守的な学習率
+    "save_steps": 500,
+    "warmup_steps": 200,
+    "gradient_accumulation": 4,     # 実効バッチサイズ32
+    "pad_token": 151676,            # Qwen3のPAD_TOKEN
+    "save_folder": "checkpoints-qwen3-japanese",
+    "project_name": "vyvotts-japanese-qwen3",
+    "run_name": "moe-qwen3-finetune",
 }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="日本語ファインチューニング")
+    parser = argparse.ArgumentParser(description="日本語ファインチューニング (Qwen3)")
     parser.add_argument("--dataset_path", type=str, default=DEFAULT_CONFIG["dataset_path"],
                         help="トークン化済みデータセットのパス")
     parser.add_argument("--model_name", type=str, default=DEFAULT_CONFIG["model_name"],
@@ -57,7 +58,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 50)
-    print("日本語ファインチューニング (v2: 最適化済み)")
+    print("日本語ファインチューニング (Qwen3)")
     print("=" * 50)
     print(f"Dataset: {args.dataset_path}")
     print(f"Model: {args.model_name}")
@@ -78,9 +79,9 @@ def main():
     # モデル読み込み
     print("\nLoading model...")
     # トークナイザーはベースモデルから読み込む
-    tokenizer = AutoTokenizer.from_pretrained("LiquidAI/LFM2-350M")
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     # モデルを読み込む
-    model = Lfm2ForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
