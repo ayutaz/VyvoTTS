@@ -15,20 +15,20 @@ import torch
 import wandb
 import argparse
 
-# Qwen3用デフォルト設定
+# Qwen3 0.6B用デフォルト設定
 DEFAULT_CONFIG = {
     "dataset_path": "./moe_tokenized_qwen3",
-    "model_name": "Vyvo/VyvoTTS-Qwen3-0.6B-PT",
+    "model_name": "Vyvo/Qwen3-0.6B-PT",  # 0.6Bプリトレーニングモデル
     "epochs": 3,
-    "batch_size": 8,                # Qwen3は大きいのでbatch size小さめ
+    "batch_size": 8,                # 0.6Bなのでbatch 8可能
     "learning_rate": 1e-5,          # より保守的な学習率
     "save_steps": 500,
     "warmup_steps": 200,
-    "gradient_accumulation": 4,     # 実効バッチサイズ32
+    "gradient_accumulation": 4,     # 実効バッチサイズ32 (8*4)
     "pad_token": 151676,            # Qwen3のPAD_TOKEN
     "save_folder": "checkpoints-qwen3-japanese",
     "project_name": "vyvotts-japanese-qwen3",
-    "run_name": "moe-qwen3-finetune",
+    "run_name": "moe-qwen3-0.6b-finetune",
 }
 
 
