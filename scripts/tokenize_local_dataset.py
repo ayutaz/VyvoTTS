@@ -15,6 +15,8 @@ import os
 import yaml
 import torch
 import torchaudio.transforms as T
+import soundfile as sf
+import numpy as np
 from datasets import load_from_disk
 from snac import SNAC
 from transformers import AutoTokenizer
@@ -142,9 +144,9 @@ def process_local_dataset(
     ds = load_from_disk(input_dir)
     print(f"Dataset loaded: {len(ds)} samples")
 
-    # Get sample rate from first audio sample
-    ds_sample_rate = ds[0]["audio"]["sampling_rate"]
-    print(f"Source sample rate: {ds_sample_rate}")
+    # For Windows compatibility, load audio directly from file paths
+    # instead of using HuggingFace Audio feature
+    ds_sample_rate = target_sample_rate  # Will be resampled if needed
     print(f"Target sample rate: {target_sample_rate}")
 
     # Load SNAC model
@@ -164,12 +166,29 @@ def process_local_dataset(
         example = ds[idx]
 
         try:
+            # Load audio directly using soundfile (Windows compatible)
             audio_data = example.get("audio")
-            if audio_data is None or "array" not in audio_data:
+            if audio_data is None:
                 failed_count += 1
                 continue
 
-            audio_array = audio_data["array"]
+            # Handle both dict format (with path) and array format
+            if isinstance(audio_data, dict):
+                if "path" in audio_data and audio_data["path"]:
+                    # Load from file path
+                    audio_array, file_sr = sf.read(audio_data["path"])
+                    if len(audio_array.shape) > 1:
+                        audio_array = audio_array.mean(axis=1)  # Convert to mono
+                    ds_sample_rate = file_sr
+                elif "array" in audio_data:
+                    audio_array = audio_data["array"]
+                    ds_sample_rate = audio_data.get("sampling_rate", target_sample_rate)
+                else:
+                    failed_count += 1
+                    continue
+            else:
+                failed_count += 1
+                continue
 
             # Tokenize audio
             codes_list = tokenise_audio(
@@ -183,8 +202,10 @@ def process_local_dataset(
             # Remove duplicate frames
             codes_list = remove_duplicate_frames(codes_list)
 
-            # Tokenize text
+            # Tokenize text (with optional speaker prefix for multi-speaker)
             text_prompt = example[text_field]
+            if "source" in example and example["source"]:
+                text_prompt = f"{example['source']}: {text_prompt}"
             text_ids = tokenizer.encode(text_prompt, add_special_tokens=True)
             text_ids.append(END_OF_TEXT)
 
