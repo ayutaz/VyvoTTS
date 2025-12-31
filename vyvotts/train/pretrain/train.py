@@ -170,7 +170,7 @@ class FSDPTrainer(Trainer):
             sampler=sampler,
             collate_fn=self.data_collator,
             drop_last=self.args.dataloader_drop_last,
-            num_workers=0,
+            num_workers=4,  # 最適化: 0 -> 4 (データローディング並列化)
             pin_memory=self.args.dataloader_pin_memory,
         )
 
@@ -286,7 +286,7 @@ training_args = TrainingArguments(
     overwrite_output_dir=True,
     num_train_epochs=epochs,
     per_device_train_batch_size=batch_size,
-    logging_steps=1,
+    logging_steps=50,  # 最適化: 1 -> 50 (ログ頻度削減)
     bf16=True,
     output_dir=f"./{base_repo_id}",
     fsdp="auto_wrap",

@@ -95,48 +95,56 @@ def main():
             name=DEFAULT_CONFIG["run_name"]
         )
 
-    # トレーニング設定
+    # トレーニング設定（最適化済み）
     training_args = TrainingArguments(
         overwrite_output_dir=True,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation,
-        logging_steps=10,
+        logging_steps=50,  # 最適化: 10 -> 50
         bf16=True,
+        tf32=True,  # TF32行列演算有効化
         output_dir=f"./{args.save_folder}",
         report_to="wandb" if not args.no_wandb else "none",
         save_steps=args.save_steps,
+        save_total_limit=3,  # チェックポイント数制限
         remove_unused_columns=True,
         learning_rate=args.learning_rate,
         warmup_steps=args.warmup_steps,
         lr_scheduler_type="cosine",
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},  # PyTorch 2.0+最適化
         optim="adamw_torch_fused",
+        max_grad_norm=1.0,  # 勾配クリッピング
+        weight_decay=0.01,  # 正則化
+        # DataLoader最適化
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,
+        dataloader_drop_last=True,
     )
 
-    # データコレーター
+    # データコレーター（最適化版: pad_sequenceを使用）
     def data_collator(features):
-        input_ids = [f["input_ids"] for f in features]
-        attention_mask = [f["attention_mask"] for f in features]
-        labels = [f["labels"] for f in features]
+        input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in features]
+        attention_mask = [torch.tensor(f["attention_mask"], dtype=torch.long) for f in features]
+        labels = [torch.tensor(f["labels"], dtype=torch.long) for f in features]
 
-        # パディング
-        max_len = max(len(ids) for ids in input_ids)
-
-        padded_input_ids = []
-        padded_attention_mask = []
-        padded_labels = []
-
-        for ids, mask, lab in zip(input_ids, attention_mask, labels):
-            pad_len = max_len - len(ids)
-            padded_input_ids.append(ids + [DEFAULT_CONFIG["pad_token"]] * pad_len)
-            padded_attention_mask.append(mask + [0] * pad_len)
-            padded_labels.append(lab + [-100] * pad_len)
+        # torch.nn.utils.rnn.pad_sequenceを使用した高速パディング
+        padded_input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids, batch_first=True, padding_value=DEFAULT_CONFIG["pad_token"]
+        )
+        padded_attention_mask = torch.nn.utils.rnn.pad_sequence(
+            attention_mask, batch_first=True, padding_value=0
+        )
+        padded_labels = torch.nn.utils.rnn.pad_sequence(
+            labels, batch_first=True, padding_value=-100
+        )
 
         return {
-            "input_ids": torch.tensor(padded_input_ids, dtype=torch.long),
-            "attention_mask": torch.tensor(padded_attention_mask, dtype=torch.long),
-            "labels": torch.tensor(padded_labels, dtype=torch.long),
+            "input_ids": padded_input_ids,
+            "attention_mask": padded_attention_mask,
+            "labels": padded_labels,
         }
 
     # トレーナー
