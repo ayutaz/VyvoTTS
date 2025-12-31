@@ -104,7 +104,7 @@ def main():
             name=DEFAULT_CONFIG["run_name"]
         )
 
-    # トレーニング設定（最適化済み）
+    # トレーニング設定（最適化済み v2）
     training_args = TrainingArguments(
         overwrite_output_dir=True,
         num_train_epochs=args.epochs,
@@ -112,15 +112,20 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation,
         logging_steps=50,  # 最適化: 10 -> 50 (ログ頻度削減)
         bf16=True,
+        tf32=True,  # TF32行列演算有効化（Ampere以降で高速化）
         output_dir=f"./{args.save_folder}",
         report_to="wandb" if not args.no_wandb else "none",
         save_steps=args.save_steps,
+        save_total_limit=3,  # チェックポイント数制限（ディスク節約）
         remove_unused_columns=True,
         learning_rate=args.learning_rate,
         warmup_steps=args.warmup_steps,
         lr_scheduler_type="cosine",
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},  # PyTorch 2.0+最適化
         optim="adamw_torch_fused",
+        max_grad_norm=1.0,  # 勾配クリッピング（安定性向上）
+        weight_decay=0.01,  # 正則化（過学習防止）
         # DataLoader最適化フラグ
         dataloader_num_workers=4,  # データローディング並列化
         dataloader_pin_memory=True,  # CPU→GPU転送高速化
