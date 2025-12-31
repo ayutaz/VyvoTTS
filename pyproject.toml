@@ -9,6 +9,7 @@ dependencies = [
     "datasets>=4.4.2",
     "flash-attn>=2.7.4",
     "kernels>=0.11.5",
+    "pyopenjtalk-plus>=0.4.1.post7",
     "pyyaml>=6.0.3",
     "snac>=1.2.1",
     "soundfile>=0.13.1",
