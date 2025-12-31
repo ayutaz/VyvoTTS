@@ -29,6 +29,7 @@ import soundfile as sf
 import numpy as np
 from functools import lru_cache
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from snac import SNAC
 from transformers import AutoTokenizer
 from tqdm import tqdm
@@ -52,6 +53,34 @@ def get_resample_transform(orig_freq: int, new_freq: int):
 def cached_preprocess_japanese_text(text: str, mode: str) -> str:
     """Cached version of Japanese text preprocessing."""
     return preprocess_japanese_text(text, mode=mode)
+
+
+def load_audio_file(item: dict, max_audio_length: float) -> dict:
+    """
+    Load audio file in a separate thread.
+    Returns dict with audio data or None if should be skipped.
+    """
+    wav_path = item["wav_path"]
+    try:
+        audio_array, sample_rate = sf.read(wav_path)
+
+        # Convert to mono if stereo
+        if len(audio_array.shape) > 1:
+            audio_array = audio_array.mean(axis=1)
+
+        # Check duration
+        duration = len(audio_array) / sample_rate
+        if duration > max_audio_length:
+            return {"status": "skipped_long", "item": item}
+
+        return {
+            "status": "ok",
+            "item": item,
+            "audio_array": audio_array,
+            "sample_rate": sample_rate,
+        }
+    except Exception as e:
+        return {"status": "failed", "item": item, "error": str(e)}
 
 
 def normalize_japanese_text(text: str) -> str:
@@ -234,85 +263,112 @@ def process_moe_direct(
     file_list = collect_moe_files(moe_path, text_field)
     print(f"Total files found: {len(file_list)}")
 
-    # Load SNAC model
+    # Load SNAC model with torch.compile optimization
     print("\nLoading SNAC model: hubertsiuzdak/snac_24khz")
     snac_model = SNAC.from_pretrained("hubertsiuzdak/snac_24khz")
     snac_model = snac_model.to("cuda")
+    snac_model.eval()
+    # Apply torch.compile for faster inference (PyTorch 2.0+)
+    try:
+        snac_model = torch.compile(snac_model, mode="reduce-overhead")
+        print("  torch.compile applied successfully")
+    except Exception as e:
+        print(f"  torch.compile skipped: {e}")
 
     # Load text tokenizer
     print(f"Loading tokenizer: {tokenizer_model}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model)
 
-    # Process each file
+    # Process files with multi-threaded I/O for audio loading
     processed_data = []
     failed_count = 0
     skipped_long = 0
+    num_io_workers = 4  # Number of threads for audio file loading
 
-    for item in tqdm(file_list, desc="Tokenizing audio"):
-        wav_path = item["wav_path"]
-        text = item["text"]
-        speaker_id = item["speaker_id"]
+    print(f"\nProcessing with {num_io_workers} I/O workers...")
 
-        try:
-            # Load audio with soundfile
-            audio_array, sample_rate = sf.read(wav_path)
+    # Process in batches with prefetching
+    batch_size = 32  # Number of files to prefetch
+    pbar = tqdm(total=len(file_list), desc="Tokenizing audio")
 
-            # Convert to mono if stereo
-            if len(audio_array.shape) > 1:
-                audio_array = audio_array.mean(axis=1)
+    for batch_start in range(0, len(file_list), batch_size):
+        batch_end = min(batch_start + batch_size, len(file_list))
+        batch_items = file_list[batch_start:batch_end]
 
-            # Skip very long audio
-            duration = len(audio_array) / sample_rate
-            if duration > max_audio_length:
-                skipped_long += 1
+        # Load audio files in parallel using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=num_io_workers) as executor:
+            futures = {
+                executor.submit(load_audio_file, item, max_audio_length): item
+                for item in batch_items
+            }
+
+            loaded_data = []
+            for future in as_completed(futures):
+                result = future.result()
+                if result["status"] == "ok":
+                    loaded_data.append(result)
+                elif result["status"] == "skipped_long":
+                    skipped_long += 1
+                else:
+                    failed_count += 1
+
+        # Process loaded audio on GPU (sequential for GPU efficiency)
+        for data in loaded_data:
+            try:
+                item = data["item"]
+                audio_array = data["audio_array"]
+                sample_rate = data["sample_rate"]
+                text = item["text"]
+                speaker_id = item["speaker_id"]
+
+                # Tokenize audio
+                codes_list = tokenise_audio(
+                    audio_array,
+                    snac_model,
+                    sample_rate,
+                    target_sample_rate,
+                    AUDIO_TOKENS_START
+                )
+
+                # Remove duplicate frames
+                codes_list = remove_duplicate_frames(codes_list)
+
+                # Preprocess Japanese text (with caching for duplicates)
+                if preprocess_mode == "none":
+                    text = normalize_japanese_text(text)
+                else:
+                    text = cached_preprocess_japanese_text(text, preprocess_mode)
+
+                # Tokenize text with speaker prefix
+                text_prompt = f"{speaker_id}: {text}"
+                text_ids = tokenizer.encode(text_prompt, add_special_tokens=True)
+                text_ids.append(END_OF_TEXT)
+
+                # Construct full sequence with special tokens
+                input_ids = (
+                    [START_OF_HUMAN]
+                    + text_ids
+                    + [END_OF_HUMAN]
+                    + [START_OF_AI]
+                    + [START_OF_SPEECH]
+                    + codes_list
+                    + [END_OF_SPEECH]
+                    + [END_OF_AI]
+                )
+
+                processed_data.append({
+                    "input_ids": input_ids,
+                    "labels": input_ids,
+                    "attention_mask": [1] * len(input_ids),
+                })
+
+            except Exception as e:
+                failed_count += 1
                 continue
 
-            # Tokenize audio
-            codes_list = tokenise_audio(
-                audio_array,
-                snac_model,
-                sample_rate,
-                target_sample_rate,
-                AUDIO_TOKENS_START
-            )
+        pbar.update(len(batch_items))
 
-            # Remove duplicate frames
-            codes_list = remove_duplicate_frames(codes_list)
-
-            # Preprocess Japanese text (with caching for duplicates)
-            if preprocess_mode == "none":
-                # Legacy mode: simple normalization only
-                text = normalize_japanese_text(text)
-            else:
-                # New mode: pyopenjtalk-based preprocessing (cached)
-                text = cached_preprocess_japanese_text(text, preprocess_mode)
-
-            # Tokenize text with speaker prefix
-            text_prompt = f"{speaker_id}: {text}"
-            text_ids = tokenizer.encode(text_prompt, add_special_tokens=True)
-            text_ids.append(END_OF_TEXT)
-
-            # Construct full sequence with special tokens
-            input_ids = (
-                [START_OF_HUMAN]
-                + text_ids
-                + [END_OF_HUMAN]
-                + [START_OF_AI]
-                + [START_OF_SPEECH]
-                + codes_list
-                + [END_OF_SPEECH]
-                + [END_OF_AI]
-            )
-
-            processed_data.append({
-                "input_ids": input_ids,
-                "labels": input_ids,
-                "attention_mask": [1] * len(input_ids),
-            })
-
-        except Exception as e:
-            failed_count += 1
-            continue
+    pbar.close()
 
     print(f"\nProcessed: {len(processed_data)} samples")
     print(f"Failed: {failed_count} samples")

@@ -53,6 +53,8 @@ def main():
                         help="チェックポイント保存先")
     parser.add_argument("--no_wandb", action="store_true",
                         help="WandBを無効化")
+    parser.add_argument("--no_compile", action="store_true",
+                        help="torch.compileを無効化")
 
     args = parser.parse_args()
 
@@ -86,6 +88,14 @@ def main():
         attn_implementation="flash_attention_2",
     )
     print(f"Model loaded: {args.model_name}")
+
+    # torch.compileで最適化（PyTorch 2.0+）
+    if not args.no_compile:
+        try:
+            model = torch.compile(model)
+            print("torch.compile applied successfully")
+        except Exception as e:
+            print(f"torch.compile skipped: {e}")
 
     # WandB初期化
     if not args.no_wandb:
