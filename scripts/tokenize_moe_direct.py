@@ -4,10 +4,17 @@ MOEデータセット直接トークン化スクリプト
 MOEデータセットから直接音声ファイルを読み込み、SNACコーデックでトークン化します。
 Windows環境でtorchcodec問題を回避するため、soundfileを使用。
 
+pyopenjtalk-plusを使用した高品質日本語前処理に対応:
+- prosody: 韻律マーカー付き音素列（ESPNet/Style-BERT-VITS2方式、最高品質）
+- phoneme: 音素列のみ
+- kana: カタカナ読み
+- none: 前処理なし（従来方式）
+
 使用方法:
     uv run python scripts/tokenize_moe_direct.py \
         --moe_path D:/moe_top20 \
-        --output_dir ./moe_tokenized
+        --output_dir ./moe_tokenized \
+        --preprocess_mode prosody
 """
 
 import argparse
@@ -26,10 +33,13 @@ from transformers import AutoTokenizer
 from tqdm import tqdm
 from datasets import Dataset
 
+# Import Japanese preprocessing utility
+from vyvotts.utils.japanese_preprocessing import preprocess_japanese_text
+
 
 def normalize_japanese_text(text: str) -> str:
     """
-    日本語テキストを正規化する。
+    日本語テキストを正規化する（従来方式）。
     - NFKC正規化（全角英数→半角、半角カナ→全角カナ）
     - 不要なスペース削除
     - 制御文字削除
@@ -54,7 +64,7 @@ def load_config(config_path):
 
 def tokenise_audio(waveform, snac_model, ds_sample_rate, target_sample_rate, audio_tokens_start):
     """
-    Tokenize audio waveform using SNAC codec.
+    Tokenize audio waveform using SNAC codec (optimized vectorized version).
     """
     # Convert to tensor and prepare for processing
     waveform = torch.from_numpy(waveform).unsqueeze(0)
@@ -71,43 +81,46 @@ def tokenise_audio(waveform, snac_model, ds_sample_rate, target_sample_rate, aud
     with torch.inference_mode():
         codes = snac_model.encode(waveform)
 
-    # Interleave codes from 3 codebooks with proper offsets
-    all_codes = []
+    # Vectorized interleaving - transfer all codes to CPU at once
     num_frames = codes[0].shape[1]
 
-    for i in range(num_frames):
-        # Level 0: 1 code per frame
-        all_codes.append(codes[0][0][i].item() + audio_tokens_start)
-        # Level 1: 2 codes per frame
-        all_codes.append(codes[1][0][2*i].item() + audio_tokens_start + 4096)
-        # Level 2: 4 codes per frame
-        all_codes.append(codes[2][0][4*i].item() + audio_tokens_start + (2 * 4096))
-        all_codes.append(codes[2][0][4*i + 1].item() + audio_tokens_start + (3 * 4096))
-        # Continue level 1 and 2 interleaving
-        all_codes.append(codes[1][0][2*i + 1].item() + audio_tokens_start + (4 * 4096))
-        all_codes.append(codes[2][0][4*i + 2].item() + audio_tokens_start + (5 * 4096))
-        all_codes.append(codes[2][0][4*i + 3].item() + audio_tokens_start + (6 * 4096))
+    # Transfer to CPU and convert to numpy in one operation per codebook
+    c0 = codes[0][0].cpu().numpy()  # Shape: (num_frames,)
+    c1 = codes[1][0].cpu().numpy()  # Shape: (num_frames * 2,)
+    c2 = codes[2][0].cpu().numpy()  # Shape: (num_frames * 4,)
 
-    return all_codes
+    # Pre-allocate output array
+    all_codes = np.empty(num_frames * 7, dtype=np.int64)
+
+    # Vectorized assignment with offsets
+    all_codes[0::7] = c0 + audio_tokens_start
+    all_codes[1::7] = c1[0::2] + audio_tokens_start + 4096
+    all_codes[2::7] = c2[0::4] + audio_tokens_start + (2 * 4096)
+    all_codes[3::7] = c2[1::4] + audio_tokens_start + (3 * 4096)
+    all_codes[4::7] = c1[1::2] + audio_tokens_start + (4 * 4096)
+    all_codes[5::7] = c2[2::4] + audio_tokens_start + (5 * 4096)
+    all_codes[6::7] = c2[3::4] + audio_tokens_start + (6 * 4096)
+
+    return all_codes.tolist()
 
 
 def remove_duplicate_frames(codes_list):
     """
-    Remove consecutive duplicate audio frames to reduce redundancy.
+    Remove consecutive duplicate audio frames to reduce redundancy (optimized vectorized version).
     """
     if len(codes_list) % 7 != 0:
         raise ValueError("Input list length must be divisible by 7")
 
-    result = codes_list[:7]
+    # Convert to numpy array and reshape to (num_frames, 7)
+    codes_array = np.array(codes_list, dtype=np.int64).reshape(-1, 7)
 
-    for i in range(7, len(codes_list), 7):
-        current_first_code = codes_list[i]
-        previous_first_code = result[-7]
+    # Create mask for non-duplicate frames (first code differs from previous)
+    # First frame is always kept
+    first_codes = codes_array[:, 0]
+    mask = np.concatenate([[True], first_codes[1:] != first_codes[:-1]])
 
-        if current_first_code != previous_first_code:
-            result.extend(codes_list[i:i+7])
-
-    return result
+    # Apply mask and flatten back to list
+    return codes_array[mask].flatten().tolist()
 
 
 def collect_moe_files(moe_path: Path, text_field: str = "anime_whisper_transcription"):
@@ -168,6 +181,7 @@ def process_moe_direct(
     model_type="lfm2",
     target_sample_rate=24000,
     max_audio_length=30.0,  # Skip audio longer than 30 seconds
+    preprocess_mode="prosody",  # Japanese text preprocessing mode
 ):
     """
     Process MOE dataset directly: tokenize audio and text.
@@ -248,8 +262,13 @@ def process_moe_direct(
             # Remove duplicate frames
             codes_list = remove_duplicate_frames(codes_list)
 
-            # Normalize Japanese text
-            text = normalize_japanese_text(text)
+            # Preprocess Japanese text
+            if preprocess_mode == "none":
+                # Legacy mode: simple normalization only
+                text = normalize_japanese_text(text)
+            else:
+                # New mode: pyopenjtalk-based preprocessing
+                text = preprocess_japanese_text(text, mode=preprocess_mode)
 
             # Tokenize text with speaker prefix
             text_prompt = f"{speaker_id}: {text}"
@@ -331,6 +350,13 @@ def main():
         default=30.0,
         help="最大音声長（秒）。これより長い音声はスキップ (default: 30.0)",
     )
+    parser.add_argument(
+        "--preprocess_mode",
+        type=str,
+        default="prosody",
+        choices=["prosody", "phoneme", "kana", "none"],
+        help="日本語テキスト前処理モード (default: prosody, 最高品質)",
+    )
 
     args = parser.parse_args()
 
@@ -340,6 +366,7 @@ def main():
         text_field=args.text_field,
         model_type=args.model_type,
         max_audio_length=args.max_audio_length,
+        preprocess_mode=args.preprocess_mode,
     )
 
 

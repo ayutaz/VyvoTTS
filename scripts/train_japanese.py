@@ -14,20 +14,20 @@ import torch
 import wandb
 import argparse
 
-# デフォルト設定（v2: 最適化済み）
+# デフォルト設定（v3: MOE 53Kデータセット用に最適化）
 DEFAULT_CONFIG = {
-    "dataset_path": "./jsut_tokenized",
+    "dataset_path": "./moe_tokenized_lfm2",
     "model_name": "Vyvo/VyvoTTS-LFM2-Neuvillette",
-    "epochs": 2,                    # 3 → 2（過学習回避）
-    "batch_size": 16,               # 8 → 16（RTX 4090で余裕あり）
-    "learning_rate": 5e-5,
-    "save_steps": 500,              # 1000 → 500（細かくチェックポイント）
-    "warmup_steps": 500,            # 100 → 500（小規模データで安定化）
-    "gradient_accumulation": 2,     # 新規追加（実効バッチサイズ32）
+    "epochs": 3,                    # 大規模データなので3エポック
+    "batch_size": 16,               # RTX 4090で16可能
+    "learning_rate": 2e-5,          # 5e-5 → 2e-5（プリトレーニング済みモデルなので控えめに）
+    "save_steps": 1000,             # 500 → 1000（大規模データ用）
+    "warmup_steps": 300,            # 500 → 300（大規模データは早めに本学習へ）
+    "gradient_accumulation": 4,     # 2 → 4（実効バッチサイズ64で安定化）
     "pad_token": 64407,
-    "save_folder": "checkpoints-japanese-v2",
-    "project_name": "vyvotts-japanese",
-    "run_name": "moe-top20-finetune-v2",
+    "save_folder": "checkpoints-lfm2-japanese",
+    "project_name": "vyvotts-japanese-lfm2",
+    "run_name": "moe-53k-lfm2-finetune",
 }
 
 
@@ -57,7 +57,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 50)
-    print("日本語ファインチューニング (v2: 最適化済み)")
+    print("日本語ファインチューニング (v3: LFM2 MOE 53K)")
     print("=" * 50)
     print(f"Dataset: {args.dataset_path}")
     print(f"Model: {args.model_name}")
@@ -94,13 +94,13 @@ def main():
             name=DEFAULT_CONFIG["run_name"]
         )
 
-    # トレーニング設定
+    # トレーニング設定（最適化済み）
     training_args = TrainingArguments(
         overwrite_output_dir=True,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation,
-        logging_steps=10,
+        logging_steps=50,  # 最適化: 10 -> 50 (ログ頻度削減)
         bf16=True,
         output_dir=f"./{args.save_folder}",
         report_to="wandb" if not args.no_wandb else "none",
@@ -111,31 +111,34 @@ def main():
         lr_scheduler_type="cosine",
         gradient_checkpointing=True,
         optim="adamw_torch_fused",
+        # DataLoader最適化フラグ
+        dataloader_num_workers=4,  # データローディング並列化
+        dataloader_pin_memory=True,  # CPU→GPU転送高速化
+        dataloader_prefetch_factor=2,  # プリフェッチ有効化
+        dataloader_drop_last=True,  # 小さいバッチを避ける
     )
 
-    # データコレーター
+    # データコレーター（最適化版: pad_sequenceを使用）
     def data_collator(features):
-        input_ids = [f["input_ids"] for f in features]
-        attention_mask = [f["attention_mask"] for f in features]
-        labels = [f["labels"] for f in features]
+        input_ids = [torch.tensor(f["input_ids"], dtype=torch.long) for f in features]
+        attention_mask = [torch.tensor(f["attention_mask"], dtype=torch.long) for f in features]
+        labels = [torch.tensor(f["labels"], dtype=torch.long) for f in features]
 
-        # パディング
-        max_len = max(len(ids) for ids in input_ids)
-
-        padded_input_ids = []
-        padded_attention_mask = []
-        padded_labels = []
-
-        for ids, mask, lab in zip(input_ids, attention_mask, labels):
-            pad_len = max_len - len(ids)
-            padded_input_ids.append(ids + [DEFAULT_CONFIG["pad_token"]] * pad_len)
-            padded_attention_mask.append(mask + [0] * pad_len)
-            padded_labels.append(lab + [-100] * pad_len)
+        # torch.nn.utils.rnn.pad_sequenceを使用した高速パディング
+        padded_input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids, batch_first=True, padding_value=DEFAULT_CONFIG["pad_token"]
+        )
+        padded_attention_mask = torch.nn.utils.rnn.pad_sequence(
+            attention_mask, batch_first=True, padding_value=0
+        )
+        padded_labels = torch.nn.utils.rnn.pad_sequence(
+            labels, batch_first=True, padding_value=-100
+        )
 
         return {
-            "input_ids": torch.tensor(padded_input_ids, dtype=torch.long),
-            "attention_mask": torch.tensor(padded_attention_mask, dtype=torch.long),
-            "labels": torch.tensor(padded_labels, dtype=torch.long),
+            "input_ids": padded_input_ids,
+            "attention_mask": padded_attention_mask,
+            "labels": padded_labels,
         }
 
     # トレーナー
