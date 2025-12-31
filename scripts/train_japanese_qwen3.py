@@ -9,7 +9,8 @@ Qwen3はvocab size 151,669で日本語トークン効率が向上。
     uv run python scripts/train_japanese_qwen3.py --dataset_path ./moe_tokenized_qwen3 --epochs 3
 """
 
-from datasets import load_from_disk
+from pathlib import Path
+from datasets import load_from_disk, Dataset
 from transformers import Trainer, TrainingArguments, AutoTokenizer, AutoModelForCausalLM
 import torch
 import wandb
@@ -71,9 +72,20 @@ def main():
     print(f"Save folder: {args.save_folder}")
     print("=" * 50)
 
-    # データセット読み込み
+    # データセット読み込み（Arrow/Parquet自動検出）
     print("\nLoading dataset...")
-    ds = load_from_disk(args.dataset_path)
+    dataset_path = Path(args.dataset_path)
+    parquet_file = dataset_path / "data.parquet"
+
+    if parquet_file.exists():
+        # Parquet形式（高速読み込み）
+        print(f"  Detected Parquet format: {parquet_file}")
+        ds = Dataset.from_parquet(str(parquet_file))
+    else:
+        # Arrow形式（従来）
+        print(f"  Detected Arrow format: {dataset_path}")
+        ds = load_from_disk(args.dataset_path)
+
     print(f"Dataset loaded: {len(ds)} samples")
 
     # モデル読み込み

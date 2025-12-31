@@ -443,9 +443,9 @@ def main():
     parser.add_argument(
         "--format",
         type=str,
-        default="arrow",
+        default="parquet",
         choices=["arrow", "parquet"],
-        help="保存形式 (default: arrow, parquet: 学習時読み込み40-60%%高速化)",
+        help="保存形式 (default: parquet, 学習時読み込み40-60%%高速化)",
     )
 
     args = parser.parse_args()
