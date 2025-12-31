@@ -15,7 +15,17 @@ ESPNet/Style-BERT-VITS2で使用されているpyopenjtalk_prosody方式を採�
 import pyopenjtalk
 import unicodedata
 import re
-from typing import List, Dict, Any, Optional
+from functools import lru_cache
+from typing import List, Dict, Any, Optional, Tuple
+
+# Precompiled regex patterns for performance
+_RE_PHONEME = re.compile(r"\-(.*?)\+")
+_RE_A1 = re.compile(r"/A:(\-?[0-9]+)\+")
+_RE_A2 = re.compile(r"\+(\d+)\+")
+_RE_A3 = re.compile(r"\+(\d+)/")
+_RE_F2 = re.compile(r"/F:\d+_(\d+)#")
+_RE_A_FIELD = re.compile(r"/A:(\-?\d+)\+(\d+)\+(\d+)/")
+_RE_F_FIELD = re.compile(r"/F:(\d+)_(\d+)#(\d+)")
 
 
 def normalize_text(text: str) -> str:
@@ -37,34 +47,35 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-def _numeric_feature_by_regex(regex: str, s: str) -> int:
+def _numeric_feature_by_regex(pattern: re.Pattern, s: str) -> int:
     """
-    正規表現で数値特徴を抽出する。
+    正規表現で数値特徴を抽出する（プリコンパイル済みパターン使用）。
 
     Args:
-        regex: 正規表現パターン
+        pattern: プリコンパイル済み正規表現パターン
         s: 入力文字列
 
     Returns:
         抽出された数値、見つからない場合は-50
     """
-    match = re.search(regex, s)
+    match = pattern.search(s)
     if match:
         return int(match.group(1))
     return -50  # undefined
 
 
-def extract_fullcontext_label(text: str) -> List[str]:
+@lru_cache(maxsize=10000)
+def extract_fullcontext_label(text: str) -> Tuple[str, ...]:
     """
-    OpenJTalkのフルコンテキストラベルを抽出する。
+    OpenJTalkのフルコンテキストラベルを抽出する（キャッシュ付き）。
 
     Args:
         text: 入力テキスト
 
     Returns:
-        フルコンテキストラベルのリスト
+        フルコンテキストラベルのタプル（キャッシュのためlistではなくtuple）
     """
-    return pyopenjtalk.extract_fullcontext(text)
+    return tuple(pyopenjtalk.extract_fullcontext(text))
 
 
 def pyopenjtalk_prosody(text: str, drop_unvoiced_vowels: bool = True) -> str:
@@ -107,7 +118,7 @@ def pyopenjtalk_prosody(text: str, drop_unvoiced_vowels: bool = True) -> str:
         lab_curr = labels[n]
 
         # 現在の音素を抽出
-        p3_match = re.search(r"\-(.*?)\+", lab_curr)
+        p3_match = _RE_PHONEME.search(lab_curr)
         if not p3_match:
             continue
         p3 = p3_match.group(1)
@@ -125,18 +136,18 @@ def pyopenjtalk_prosody(text: str, drop_unvoiced_vowels: bool = True) -> str:
             phones.append("^")
 
         # A フィールド（モーラ・アクセント位置）を抽出
-        a1 = _numeric_feature_by_regex(r"/A:(\-?[0-9]+)\+", lab_curr)
-        a2 = _numeric_feature_by_regex(r"\+(\d+)\+", lab_curr)
-        a3 = _numeric_feature_by_regex(r"\+(\d+)/", lab_curr)
+        a1 = _numeric_feature_by_regex(_RE_A1, lab_curr)
+        a2 = _numeric_feature_by_regex(_RE_A2, lab_curr)
+        a3 = _numeric_feature_by_regex(_RE_A3, lab_curr)
 
         # F フィールドからアクセント型を取得
-        f2 = _numeric_feature_by_regex(r"/F:\d+_(\d+)#", lab_curr)
+        f2 = _numeric_feature_by_regex(_RE_F2, lab_curr)
 
         # ピッチ上昇マーカー（ESPNet方式）
         # アクセント型が0（平板）以外で、最初のモーラの後にピッチ上昇
         if n < N - 1:
             lab_next = labels[n + 1]
-            a2_next = _numeric_feature_by_regex(r"\+(\d+)\+", lab_next)
+            a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
             # 最初のモーラ(a2==1)から2番目のモーラ(a2_next==2)へ移る時にピッチ上昇
             if a2 == 1 and a2_next == 2 and f2 != 0:
                 phones.append("[")
@@ -152,11 +163,11 @@ def pyopenjtalk_prosody(text: str, drop_unvoiced_vowels: bool = True) -> str:
         if n < N - 1:
             lab_next = labels[n + 1]
             # 次の音素がアクセント句の先頭かどうか
-            p3_next_match = re.search(r"\-(.*?)\+", lab_next)
+            p3_next_match = _RE_PHONEME.search(lab_next)
             if p3_next_match:
                 p3_next = p3_next_match.group(1)
                 if p3_next not in ["sil", "pau"]:
-                    a2_next = _numeric_feature_by_regex(r"\+(\d+)\+", lab_next)
+                    a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
                     if a2_next == 1 and a3 == 1:
                         phones.append("#")
 
@@ -221,7 +232,7 @@ def extract_accent_features(text: str) -> List[Dict[str, Any]]:
 
     for label in labels:
         # 音素抽出
-        phone_match = re.search(r"\-(.*?)\+", label)
+        phone_match = _RE_PHONEME.search(label)
         if not phone_match:
             continue
         phone = phone_match.group(1)
@@ -230,7 +241,7 @@ def extract_accent_features(text: str) -> List[Dict[str, Any]]:
             continue
 
         # A フィールド（モーラ・アクセント位置）
-        a_match = re.search(r"/A:(\-?\d+)\+(\d+)\+(\d+)/", label)
+        a_match = _RE_A_FIELD.search(label)
         if a_match:
             a1 = int(a_match.group(1))
             a2 = int(a_match.group(2))
@@ -239,7 +250,7 @@ def extract_accent_features(text: str) -> List[Dict[str, Any]]:
             a1, a2, a3 = 0, 0, 0
 
         # F フィールド（アクセント句特徴）
-        f_match = re.search(r"/F:(\d+)_(\d+)#(\d+)", label)
+        f_match = _RE_F_FIELD.search(label)
         if f_match:
             f1 = int(f_match.group(1))
             f2 = int(f_match.group(2))
