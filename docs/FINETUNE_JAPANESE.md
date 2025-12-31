@@ -127,6 +127,25 @@ dataset.push_to_hub("your-username/jsut-japanese-tts")
 
 ### 3.3 音声のトークン化
 
+#### ローカルデータセット（MOE等）の場合
+
+```bash
+# Parquet形式（デフォルト、学習時読み込み40-60%高速化）
+uv run python scripts/tokenize_moe_direct.py \
+    --moe_path D:/moe_top20 \
+    --output_dir ./moe_tokenized \
+    --model_type lfm2 \
+    --preprocess_mode prosody
+
+# Arrow形式（従来方式）
+uv run python scripts/tokenize_moe_direct.py \
+    --moe_path D:/moe_top20 \
+    --output_dir ./moe_tokenized \
+    --format arrow
+```
+
+#### HuggingFaceデータセットの場合
+
 ```python
 from vyvotts.audio_tokenizer import process_dataset
 
@@ -140,6 +159,15 @@ process_dataset(
 ```
 
 **注意**: トークン化にはCUDA対応GPUが必要です。
+
+#### データセット形式
+
+| 形式 | 説明 | 用途 |
+|------|------|------|
+| **Parquet** (デフォルト) | Snappy圧縮、高速読み込み | 推奨（学習時40-60%高速化） |
+| Arrow | HuggingFace標準形式 | 互換性重視 |
+
+学習スクリプトはParquet/Arrow形式を自動検出するため、`--format`オプションを意識する必要はありません。
 
 ---
 
@@ -346,6 +374,7 @@ text = preprocess_japanese_text("音声合成技術", mode="phoneme")
 | 日本語前処理LRUキャッシュ | 2-5x | 重複テキストの処理削減 |
 | torch.compile (SNAC) | 10-20% | GPUカーネル最適化 |
 | マルチスレッドI/O | 2-3x | ThreadPoolExecutorで並列読み込み |
+| **Parquet形式** (デフォルト) | 40-60% | 学習時データ読み込み高速化 |
 
 #### 実行結果
 
