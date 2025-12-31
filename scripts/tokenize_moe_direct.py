@@ -27,6 +27,7 @@ import torch
 import torchaudio.transforms as T
 import soundfile as sf
 import numpy as np
+from functools import lru_cache
 from pathlib import Path
 from snac import SNAC
 from transformers import AutoTokenizer
@@ -35,6 +36,22 @@ from datasets import Dataset
 
 # Import Japanese preprocessing utility
 from vyvotts.utils.japanese_preprocessing import preprocess_japanese_text
+
+# Resample transform cache (avoid recreating for each file)
+_resample_cache = {}
+
+def get_resample_transform(orig_freq: int, new_freq: int):
+    """Get cached resample transform."""
+    key = (orig_freq, new_freq)
+    if key not in _resample_cache:
+        _resample_cache[key] = T.Resample(orig_freq=orig_freq, new_freq=new_freq)
+    return _resample_cache[key]
+
+# LRU cache for Japanese text preprocessing (avoid duplicate processing)
+@lru_cache(maxsize=10000)
+def cached_preprocess_japanese_text(text: str, mode: str) -> str:
+    """Cached version of Japanese text preprocessing."""
+    return preprocess_japanese_text(text, mode=mode)
 
 
 def normalize_japanese_text(text: str) -> str:
@@ -70,9 +87,9 @@ def tokenise_audio(waveform, snac_model, ds_sample_rate, target_sample_rate, aud
     waveform = torch.from_numpy(waveform).unsqueeze(0)
     waveform = waveform.to(dtype=torch.float32)
 
-    # Resample to target sample rate if needed
+    # Resample to target sample rate if needed (using cached transform)
     if ds_sample_rate != target_sample_rate:
-        resample_transform = T.Resample(orig_freq=ds_sample_rate, new_freq=target_sample_rate)
+        resample_transform = get_resample_transform(ds_sample_rate, target_sample_rate)
         waveform = resample_transform(waveform)
 
     waveform = waveform.unsqueeze(0).to("cuda")
@@ -262,13 +279,13 @@ def process_moe_direct(
             # Remove duplicate frames
             codes_list = remove_duplicate_frames(codes_list)
 
-            # Preprocess Japanese text
+            # Preprocess Japanese text (with caching for duplicates)
             if preprocess_mode == "none":
                 # Legacy mode: simple normalization only
                 text = normalize_japanese_text(text)
             else:
-                # New mode: pyopenjtalk-based preprocessing
-                text = preprocess_japanese_text(text, mode=preprocess_mode)
+                # New mode: pyopenjtalk-based preprocessing (cached)
+                text = cached_preprocess_japanese_text(text, preprocess_mode)
 
             # Tokenize text with speaker prefix
             text_prompt = f"{speaker_id}: {text}"
