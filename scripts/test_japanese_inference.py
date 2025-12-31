@@ -16,6 +16,9 @@ import yaml
 import time
 import argparse
 
+# Import Japanese preprocessing utility
+from vyvotts.utils.japanese_preprocessing import preprocess_japanese_text
+
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
@@ -27,7 +30,12 @@ def load_config(config_path: str) -> Dict[str, Any]:
 class JapaneseInference:
     """日本語TTS推論エンジン（Flash Attention 2使用）"""
 
-    def __init__(self, model_name: str = "./checkpoints-japanese", device: str = "cuda"):
+    def __init__(
+        self,
+        model_name: str = "./checkpoints-japanese",
+        device: str = "cuda",
+        preprocess_mode: str = "prosody",
+    ):
         # Load configuration
         self.config = load_config("vyvotts/configs/inference/lfm2.yaml")
 
@@ -45,6 +53,7 @@ class JapaneseInference:
         self.AUDIO_TOKENS_START = self.config['AUDIO_TOKENS_START']
 
         self.device = device
+        self.preprocess_mode = preprocess_mode
 
         # SNAC model
         self.snac_model = SNAC.from_pretrained("hubertsiuzdak/snac_24khz")
@@ -68,10 +77,12 @@ class JapaneseInference:
 
         start_token = torch.tensor([[self.START_OF_HUMAN]], dtype=torch.int64)
         end_tokens = torch.tensor([[self.END_OF_TEXT, self.END_OF_HUMAN]], dtype=torch.int64)
+        # Add START_OF_AI and START_OF_SPEECH to prompt the model to generate speech
+        start_ai_tokens = torch.tensor([[self.START_OF_AI, self.START_OF_SPEECH]], dtype=torch.int64)
 
         all_modified_input_ids = []
         for input_ids in all_input_ids:
-            modified_input_ids = torch.cat([start_token, input_ids, end_tokens], dim=1)
+            modified_input_ids = torch.cat([start_token, input_ids, end_tokens, start_ai_tokens], dim=1)
             all_modified_input_ids.append(modified_input_ids)
 
         all_padded_tensors = []
@@ -109,6 +120,7 @@ class JapaneseInference:
     def generate(
         self,
         text: str,
+        speaker_id: Optional[str] = None,
         output_path: Optional[str] = None,
         temperature: float = 0.5,
         top_p: float = 0.9,
@@ -118,9 +130,21 @@ class JapaneseInference:
         torch.cuda.synchronize()
         total_start = time.time()
 
-        # Preprocess
+        # Preprocess - apply Japanese preprocessing and add speaker ID prefix
         preprocess_start = time.time()
-        input_ids, attention_mask = self._preprocess_prompts([text])
+
+        # Apply Japanese text preprocessing (prosody/phoneme/kana/none)
+        if self.preprocess_mode != "none":
+            processed_text = preprocess_japanese_text(text, mode=self.preprocess_mode)
+        else:
+            processed_text = text
+
+        # Add speaker ID prefix (matches training format)
+        if speaker_id:
+            text_with_speaker = f"{speaker_id}: {processed_text}"
+        else:
+            text_with_speaker = processed_text
+        input_ids, attention_mask = self._preprocess_prompts([text_with_speaker])
         preprocess_time = time.time() - preprocess_start
 
         # Generate
@@ -189,7 +213,7 @@ class JapaneseInference:
 
 def main():
     parser = argparse.ArgumentParser(description="日本語TTS推論テスト")
-    parser.add_argument("--model", type=str, default="./checkpoints-japanese",
+    parser.add_argument("--model", type=str, default="./checkpoints-lfm2-japanese",
                         help="モデルのパス")
     parser.add_argument("--temperature", type=float, default=0.5,
                         help="サンプリング温度（低いほど安定、デフォルト: 0.5）")
@@ -201,13 +225,20 @@ def main():
                         help="出力ファイル名のプレフィックス")
     parser.add_argument("--text", type=str, default=None,
                         help="生成するテキスト（指定しない場合はデフォルトテキストを使用）")
+    parser.add_argument("--speaker_id", type=str, default="00163dc9",
+                        help="スピーカーID（学習データ形式に合わせる、デフォルト: 00163dc9）")
+    parser.add_argument("--preprocess_mode", type=str, default="prosody",
+                        choices=["prosody", "phoneme", "kana", "none"],
+                        help="日本語テキスト前処理モード（デフォルト: prosody, 最高品質）")
 
     args = parser.parse_args()
 
     print("=" * 50)
-    print("日本語TTSモデル推論テスト")
+    print("日本語TTSモデル推論テスト (LFM2)")
     print("=" * 50)
     print(f"モデル: {args.model}")
+    print(f"スピーカーID: {args.speaker_id}")
+    print(f"前処理モード: {args.preprocess_mode}")
     print(f"Temperature: {args.temperature}")
     print(f"Top-p: {args.top_p}")
     print(f"Repetition Penalty: {args.repetition_penalty}")
@@ -217,7 +248,8 @@ def main():
     print("\nモデルを読み込み中...")
     engine = JapaneseInference(
         model_name=args.model,
-        device="cuda"
+        device="cuda",
+        preprocess_mode=args.preprocess_mode,
     )
     print("モデルの読み込み完了")
 
@@ -236,11 +268,18 @@ def main():
 
     for i, text in enumerate(test_texts):
         print(f"\n[{i+1}/{len(test_texts)}] テキスト: {text}")
+
+        # Show preprocessed text for debugging
+        if args.preprocess_mode != "none":
+            preprocessed = preprocess_japanese_text(text, mode=args.preprocess_mode)
+            print(f"  前処理後: {preprocessed}")
+
         output_path = f"{args.output_prefix}_{i}.wav"
 
         try:
             audio, timing = engine.generate(
                 text,
+                speaker_id=args.speaker_id,
                 output_path=output_path,
                 temperature=args.temperature,
                 top_p=args.top_p,

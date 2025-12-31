@@ -129,14 +129,23 @@ def pyopenjtalk_prosody(text: str, drop_unvoiced_vowels: bool = True) -> str:
         a2 = _numeric_feature_by_regex(r"\+(\d+)\+", lab_curr)
         a3 = _numeric_feature_by_regex(r"\+(\d+)/", lab_curr)
 
-        # ピッチ上昇マーカー（アクセント句の先頭で、かつアクセント核の前）
-        if a3 == 1 and a2 == 1:
-            phones.append("[")
+        # F フィールドからアクセント型を取得
+        f2 = _numeric_feature_by_regex(r"/F:\d+_(\d+)#", lab_curr)
+
+        # ピッチ上昇マーカー（ESPNet方式）
+        # アクセント型が0（平板）以外で、最初のモーラの後にピッチ上昇
+        if n < N - 1:
+            lab_next = labels[n + 1]
+            a2_next = _numeric_feature_by_regex(r"\+(\d+)\+", lab_next)
+            # 最初のモーラ(a2==1)から2番目のモーラ(a2_next==2)へ移る時にピッチ上昇
+            if a2 == 1 and a2_next == 2 and f2 != 0:
+                phones.append("[")
 
         phones.append(p3)
 
         # ピッチ下降マーカー（アクセント核の直後）
-        if a1 == 0 and a2 == a3:
+        # a1 == 0 はアクセント核位置、a2 == a3 は最後のモーラではない確認
+        if a1 == 0 and a2 == a3 and a3 > 0:
             phones.append("]")
 
         # アクセント句境界マーカー
