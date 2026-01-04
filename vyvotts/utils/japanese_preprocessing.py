@@ -23,6 +23,7 @@ _RE_PHONEME = re.compile(r"\-(.*?)\+")
 _RE_A1 = re.compile(r"/A:(\-?[0-9]+)\+")
 _RE_A2 = re.compile(r"\+(\d+)\+")
 _RE_A3 = re.compile(r"\+(\d+)/")
+_RE_F1 = re.compile(r"/F:(\d+)_")  # アクセント句のモーラ数
 _RE_F2 = re.compile(r"/F:\d+_(\d+)#")
 _RE_A_FIELD = re.compile(r"/A:(\-?\d+)\+(\d+)\+(\d+)/")
 _RE_F_FIELD = re.compile(r"/F:(\d+)_(\d+)#(\d+)")
@@ -154,10 +155,17 @@ def pyopenjtalk_prosody(text: str, drop_unvoiced_vowels: bool = True) -> str:
 
         phones.append(p3)
 
-        # ピッチ下降マーカー（アクセント核の直後）
-        # a1 == 0 はアクセント核位置、a2 == a3 は最後のモーラではない確認
-        if a1 == 0 and a2 == a3 and a3 > 0:
-            phones.append("]")
+        # ピッチ下降マーカー（ESPnet方式）
+        # アクセント核(a1==0)の後、次のモーラが連続し、最後のモーラでない時
+        if n < N - 1:
+            lab_next = labels[n + 1]
+            a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
+            f1 = _numeric_feature_by_regex(_RE_F1, lab_curr)
+            # a1==0: アクセント核位置
+            # a2_next==a2+1: 次のモーラが連続している
+            # a2!=f1: 最後のモーラではない
+            if a1 == 0 and a2_next == a2 + 1 and a2 != f1:
+                phones.append("]")
 
         # アクセント句境界マーカー
         if n < N - 1:
