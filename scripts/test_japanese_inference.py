@@ -35,6 +35,7 @@ class JapaneseInference:
         model_name: str = "./checkpoints-japanese",
         device: str = "cuda",
         preprocess_mode: str = "prosody",
+        tokenizer_path: Optional[str] = None,
     ):
         # Load configuration
         self.config = load_config("vyvotts/configs/inference/lfm2.yaml")
@@ -66,8 +67,14 @@ class JapaneseInference:
             attn_implementation="flash_attention_2",
             device_map="auto",
         )
-        # Use base model tokenizer (checkpoints may not include tokenizer)
-        self.tokenizer = AutoTokenizer.from_pretrained("LiquidAI/LFM2-350M")
+
+        # Load tokenizer (extended tokenizer for prosody_accent mode)
+        if tokenizer_path:
+            print(f"Loading extended tokenizer from: {tokenizer_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        else:
+            # Use base model tokenizer (checkpoints may not include tokenizer)
+            self.tokenizer = AutoTokenizer.from_pretrained("LiquidAI/LFM2-350M")
 
     def _preprocess_prompts(self, prompts: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
         all_input_ids = []
@@ -213,8 +220,10 @@ class JapaneseInference:
 
 def main():
     parser = argparse.ArgumentParser(description="日本語TTS推論テスト")
-    parser.add_argument("--model", type=str, default="./checkpoints-lfm2-japanese",
+    parser.add_argument("--model", type=str, default="./checkpoints-lfm2-japanese-accent",
                         help="モデルのパス")
+    parser.add_argument("--tokenizer_path", type=str, default="./moe_tokenized_accent/tokenizer",
+                        help="拡張トークナイザーのパス（prosody_accentモード用）")
     parser.add_argument("--temperature", type=float, default=0.5,
                         help="サンプリング温度（低いほど安定、デフォルト: 0.5）")
     parser.add_argument("--top_p", type=float, default=0.9,
@@ -227,9 +236,9 @@ def main():
                         help="生成するテキスト（指定しない場合はデフォルトテキストを使用）")
     parser.add_argument("--speaker_id", type=str, default="00163dc9",
                         help="スピーカーID（学習データ形式に合わせる、デフォルト: 00163dc9）")
-    parser.add_argument("--preprocess_mode", type=str, default="prosody",
-                        choices=["prosody", "phoneme", "kana", "none"],
-                        help="日本語テキスト前処理モード（デフォルト: prosody, 最高品質）")
+    parser.add_argument("--preprocess_mode", type=str, default="prosody_accent",
+                        choices=["prosody", "prosody_accent", "prosody_extended", "phoneme", "kana", "none"],
+                        help="日本語テキスト前処理モード（デフォルト: prosody_accent）")
 
     args = parser.parse_args()
 
@@ -237,6 +246,7 @@ def main():
     print("日本語TTSモデル推論テスト (LFM2)")
     print("=" * 50)
     print(f"モデル: {args.model}")
+    print(f"トークナイザー: {args.tokenizer_path}")
     print(f"スピーカーID: {args.speaker_id}")
     print(f"前処理モード: {args.preprocess_mode}")
     print(f"Temperature: {args.temperature}")
@@ -246,10 +256,13 @@ def main():
 
     # ローカルチェックポイントを使用（Flash Attention 2）
     print("\nモデルを読み込み中...")
+    # prosody_accentモード以外はtokenizer_pathを使わない
+    tokenizer_path = args.tokenizer_path if args.preprocess_mode == "prosody_accent" else None
     engine = JapaneseInference(
         model_name=args.model,
         device="cuda",
         preprocess_mode=args.preprocess_mode,
+        tokenizer_path=tokenizer_path,
     )
     print("モデルの読み込み完了")
 
