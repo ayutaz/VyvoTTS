@@ -5,7 +5,8 @@ MOEデータセットから直接音声ファイルを読み込み、SNACコー�
 Windows環境でtorchcodec問題を回避するため、soundfileを使用。
 
 pyopenjtalk-plusを使用した高品質日本語前処理に対応:
-- prosody: 韻律マーカー付き音素列（ESPNet/Style-BERT-VITS2方式、最高品質）
+- prosody_accent: アクセント特殊トークン付き（推奨、デフォルト）
+- prosody: 韻律マーカー付き音素列（ESPNet/Style-BERT-VITS2方式）
 - phoneme: 音素列のみ
 - kana: カタカナ読み
 - none: 前処理なし（従来方式）
@@ -13,8 +14,8 @@ pyopenjtalk-plusを使用した高品質日本語前処理に対応:
 使用方法:
     uv run python scripts/tokenize_moe_direct.py \
         --moe_path D:/moe_top20 \
-        --output_dir ./moe_tokenized \
-        --preprocess_mode prosody
+        --output_dir ./moe_tokenized_accent \
+        --preprocess_mode prosody_accent
 """
 
 import argparse
@@ -36,10 +37,29 @@ from tqdm import tqdm
 from datasets import Dataset
 
 # Import Japanese preprocessing utility
-from vyvotts.utils.japanese_preprocessing import preprocess_japanese_text
+from vyvotts.utils.japanese_preprocessing import preprocess_japanese_text, ACCENT_TOKENS
 
 # Resample transform cache (avoid recreating for each file)
 _resample_cache = {}
+
+
+def create_accent_tokenizer(base_model: str = "Vyvo/VyvoTTS-LFM2-Neuvillette"):
+    """
+    Create tokenizer with accent special tokens.
+
+    This allows the model to learn pitch accent patterns by treating
+    <a-8>, <a-7>, ..., <a0>, ..., <a15> as single tokens.
+
+    Args:
+        base_model: Base model to load tokenizer from (should be TTS model with audio tokens)
+
+    Returns:
+        Extended tokenizer with accent tokens
+    """
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
+    num_added = tokenizer.add_special_tokens({'additional_special_tokens': ACCENT_TOKENS})
+    print(f"  Added {num_added} accent tokens. New vocab size: {len(tokenizer)}")
+    return tokenizer
 
 def get_resample_transform(orig_freq: int, new_freq: int):
     """Get cached resample transform."""
@@ -278,7 +298,14 @@ def process_moe_direct(
 
     # Load text tokenizer
     print(f"Loading tokenizer: {tokenizer_model}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_model)
+    if preprocess_mode == "prosody_accent":
+        # Use TTS model (Vyvo/VyvoTTS-LFM2-Neuvillette) as base for accent tokenizer
+        # This ensures audio tokens are already in the vocabulary
+        tts_model = "Vyvo/VyvoTTS-LFM2-Neuvillette"
+        print(f"  Using TTS model for accent tokenizer: {tts_model}")
+        tokenizer = create_accent_tokenizer(tts_model)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_model)
 
     # Process files with multi-threaded I/O for audio loading
     processed_data = []
@@ -392,6 +419,12 @@ def process_moe_direct(
         # Arrow形式（デフォルト）
         tokenized_ds.save_to_disk(str(output_path))
 
+    # Save tokenizer if prosody_accent mode (needed for training and inference)
+    if preprocess_mode == "prosody_accent":
+        tokenizer_path = output_path / "tokenizer"
+        tokenizer.save_pretrained(str(tokenizer_path))
+        print(f"Saved accent tokenizer: {tokenizer_path}")
+
     print("Done!")
 
     return tokenized_ds
@@ -436,9 +469,9 @@ def main():
     parser.add_argument(
         "--preprocess_mode",
         type=str,
-        default="prosody",
-        choices=["prosody", "phoneme", "kana", "none"],
-        help="日本語テキスト前処理モード (default: prosody, 最高品質)",
+        default="prosody_accent",
+        choices=["prosody", "prosody_accent", "prosody_extended", "phoneme", "kana", "none"],
+        help="日本語テキスト前処理モード (default: prosody_accent=アクセント特殊トークン付き)",
     )
     parser.add_argument(
         "--format",
