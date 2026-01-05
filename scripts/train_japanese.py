@@ -16,9 +16,9 @@ import torch._dynamo
 import wandb
 import argparse
 
-# デフォルト設定（v3: MOE 53Kデータセット用に最適化）
+# デフォルト設定（v4: アクセント特殊トークン対応）
 DEFAULT_CONFIG = {
-    "dataset_path": "./moe_tokenized_lfm2",
+    "dataset_path": "./moe_tokenized_accent",
     "model_name": "Vyvo/VyvoTTS-LFM2-Neuvillette",
     "epochs": 3,                    # 大規模データなので3エポック
     "batch_size": 16,               # RTX 4090 24GB (gradient_checkpointing=False)
@@ -27,9 +27,9 @@ DEFAULT_CONFIG = {
     "warmup_steps": 200,            # 高速化に伴い調整
     "gradient_accumulation": 2,     # 4 → 2（実効バッチサイズ64維持、ステップ高速化）
     "pad_token": 64407,
-    "save_folder": "checkpoints-lfm2-japanese",
+    "save_folder": "checkpoints-lfm2-japanese-accent",
     "project_name": "vyvotts-japanese-lfm2",
-    "run_name": "moe-53k-lfm2-finetune",
+    "run_name": "moe-53k-lfm2-accent",
 }
 
 
@@ -120,17 +120,37 @@ def main():
 
     print(f"Dataset loaded: {len(ds)} samples")
 
+    # トークナイザー読み込み（拡張トークナイザーを優先）
+    print("\nLoading tokenizer...")
+    extended_tokenizer_path = dataset_path / "tokenizer"
+    if extended_tokenizer_path.exists():
+        print(f"  Found extended tokenizer: {extended_tokenizer_path}")
+        tokenizer = AutoTokenizer.from_pretrained(str(extended_tokenizer_path))
+        print(f"  Loaded extended tokenizer with {len(tokenizer)} tokens")
+    else:
+        print("  Using base tokenizer: LiquidAI/LFM2-350M")
+        tokenizer = AutoTokenizer.from_pretrained("LiquidAI/LFM2-350M")
+
     # モデル読み込み
     print("\nLoading model...")
-    # トークナイザーはベースモデルから読み込む
-    tokenizer = AutoTokenizer.from_pretrained("LiquidAI/LFM2-350M")
-    # モデルを読み込む
     model = Lfm2ForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )
     print(f"Model loaded: {args.model_name}")
+
+    # 埋め込み層リサイズ（拡張トークナイザー使用時）
+    if len(tokenizer) > model.config.vocab_size:
+        print(f"\nResizing embeddings: {model.config.vocab_size} -> {len(tokenizer)}")
+        model.resize_token_embeddings(len(tokenizer))
+        # 新しい埋め込みを既存の平均で初期化（学習安定性向上）
+        with torch.no_grad():
+            embed = model.get_input_embeddings()
+            old_vocab_size = model.config.vocab_size
+            mean_embedding = embed.weight[:old_vocab_size].mean(dim=0)
+            embed.weight[old_vocab_size:len(tokenizer)] = mean_embedding
+        print("  New embeddings initialized with mean of existing embeddings")
 
     # torch.compileで最適化（PyTorch 2.0+）
     if not args.no_compile:
