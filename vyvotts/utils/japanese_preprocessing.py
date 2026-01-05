@@ -189,6 +189,234 @@ def pyopenjtalk_prosody(text: str, drop_unvoiced_vowels: bool = True) -> str:
     return " ".join(phones)
 
 
+def pyopenjtalk_prosody_extended(text: str, drop_unvoiced_vowels: bool = True) -> str:
+    """
+    日本語テキストを拡張韻律情報付き音素列に変換する。
+
+    通常のpyopenjtalk_prosodyに加えて、以下の情報を追加:
+    - a1の値（ピッチ傾斜情報）: 各音素に<数値>を付与
+    - ストレスレベル: アクセント句内の位置に基づく強弱
+
+    韻律マーカー:
+        ^ : 文頭
+        $ : 文末（平叙文）
+        ? : 文末（疑問文）
+        # : アクセント句境界
+        [ : ピッチ上昇
+        ] : ピッチ下降
+        <n> : a1の値（ピッチ傾斜）
+
+    Args:
+        text: 入力テキスト
+        drop_unvoiced_vowels: 無声母音を小文字に変換するか
+
+    Returns:
+        拡張韻律マーカー付き音素列（スペース区切り）
+
+    Example:
+        >>> pyopenjtalk_prosody_extended("こんにちは")
+        "^ k<-2> o<-1> [ N<0> n<1> i<2> ch<3> i<4> w<5> a<6> $"
+    """
+    text = normalize_text(text)
+
+    if not text:
+        return ""
+
+    labels = extract_fullcontext_label(text)
+    N = len(labels)
+
+    if N == 0:
+        return ""
+
+    phones = []
+    for n in range(N):
+        lab_curr = labels[n]
+
+        # 現在の音素を抽出
+        p3_match = _RE_PHONEME.search(lab_curr)
+        if not p3_match:
+            continue
+        p3 = p3_match.group(1)
+
+        # 無音（pau/sil）はスキップ
+        if p3 in ["sil", "pau"]:
+            continue
+
+        # 無声母音の処理（大文字→小文字）
+        if drop_unvoiced_vowels and p3 in ["A", "I", "U", "E", "O"]:
+            p3 = p3.lower()
+
+        # 文頭マーカー（最初の非無音音素の前）
+        if len(phones) == 0:
+            phones.append("^")
+
+        # A フィールド（モーラ・アクセント位置）を抽出
+        a1 = _numeric_feature_by_regex(_RE_A1, lab_curr)
+        a2 = _numeric_feature_by_regex(_RE_A2, lab_curr)
+        a3 = _numeric_feature_by_regex(_RE_A3, lab_curr)
+
+        # F フィールドからアクセント型とモーラ数を取得
+        f1 = _numeric_feature_by_regex(_RE_F1, lab_curr)
+        f2 = _numeric_feature_by_regex(_RE_F2, lab_curr)
+
+        # ピッチ上昇マーカー（ESPNet方式）
+        if n < N - 1:
+            lab_next = labels[n + 1]
+            a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
+            if a2 == 1 and a2_next == 2 and f2 != 0:
+                phones.append("[")
+
+        # 音素 + a1の値（ピッチ傾斜情報）
+        # a1が有効な値（-50以外）の場合のみマーカーを付与
+        if a1 != -50:
+            phones.append(f"{p3}<{a1}>")
+        else:
+            phones.append(p3)
+
+        # ピッチ下降マーカー（ESPnet方式）
+        if n < N - 1:
+            lab_next = labels[n + 1]
+            a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
+            if a1 == 0 and a2_next == a2 + 1 and a2 != f1:
+                phones.append("]")
+
+        # アクセント句境界マーカー
+        if n < N - 1:
+            lab_next = labels[n + 1]
+            p3_next_match = _RE_PHONEME.search(lab_next)
+            if p3_next_match:
+                p3_next = p3_next_match.group(1)
+                if p3_next not in ["sil", "pau"]:
+                    a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
+                    if a2_next == 1 and a3 == 1:
+                        phones.append("#")
+
+    # 文末マーカー
+    if phones:
+        if text.endswith("?") or text.endswith("？"):
+            phones.append("?")
+        else:
+            phones.append("$")
+
+    return " ".join(phones)
+
+
+# アクセント特殊トークン定義（トークナイザーに追加する）
+ACCENT_TOKENS = [f"<a{i}>" for i in range(-10, 16)]  # <a-10> ~ <a15>
+
+
+def pyopenjtalk_prosody_accent(text: str, drop_unvoiced_vowels: bool = True) -> str:
+    """
+    日本語テキストをアクセント特殊トークン付き音素列に変換する。
+
+    pyopenjtalk_prosody_extended()と異なり、アクセント情報を特殊トークンとして
+    音素の後に付与する。これにより、トークナイザーが1トークンとして認識できる。
+
+    韻律マーカー:
+        ^ : 文頭
+        $ : 文末（平叙文）
+        ? : 文末（疑問文）
+        # : アクセント句境界
+        [ : ピッチ上昇
+        ] : ピッチ下降
+        <an> : a1の値（ピッチ傾斜）を特殊トークンとして追加
+
+    Args:
+        text: 入力テキスト
+        drop_unvoiced_vowels: 無声母音を小文字に変換するか
+
+    Returns:
+        アクセント特殊トークン付き音素列（スペース区切り）
+
+    Example:
+        >>> pyopenjtalk_prosody_accent("こんにちは")
+        "^ k<a-4> [ o<a-3> N<a-2> n<a-1> i<a0> ch<a1> i<a2> w<a3> a<a4> $"
+    """
+    text = normalize_text(text)
+
+    if not text:
+        return ""
+
+    labels = extract_fullcontext_label(text)
+    N = len(labels)
+
+    if N == 0:
+        return ""
+
+    phones = []
+    for n in range(N):
+        lab_curr = labels[n]
+
+        # 現在の音素を抽出
+        p3_match = _RE_PHONEME.search(lab_curr)
+        if not p3_match:
+            continue
+        p3 = p3_match.group(1)
+
+        # 無音（pau/sil）はスキップ
+        if p3 in ["sil", "pau"]:
+            continue
+
+        # 無声母音の処理（大文字→小文字）
+        if drop_unvoiced_vowels and p3 in ["A", "I", "U", "E", "O"]:
+            p3 = p3.lower()
+
+        # 文頭マーカー（最初の非無音音素の前）
+        if len(phones) == 0:
+            phones.append("^")
+
+        # A フィールド（モーラ・アクセント位置）を抽出
+        a1 = _numeric_feature_by_regex(_RE_A1, lab_curr)
+        a2 = _numeric_feature_by_regex(_RE_A2, lab_curr)
+        a3 = _numeric_feature_by_regex(_RE_A3, lab_curr)
+
+        # F フィールドからアクセント型とモーラ数を取得
+        f1 = _numeric_feature_by_regex(_RE_F1, lab_curr)
+        f2 = _numeric_feature_by_regex(_RE_F2, lab_curr)
+
+        # ピッチ上昇マーカー（ESPNet方式）
+        if n < N - 1:
+            lab_next = labels[n + 1]
+            a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
+            if a2 == 1 and a2_next == 2 and f2 != 0:
+                phones.append("[")
+
+        # 音素 + アクセント特殊トークン（<an>形式）
+        # a1が有効な値（-50以外）の場合のみトークンを付与
+        if a1 != -50:
+            # 音素とアクセントトークンを連結（スペースなし）
+            phones.append(f"{p3}<a{a1}>")
+        else:
+            phones.append(p3)
+
+        # ピッチ下降マーカー（ESPnet方式）
+        if n < N - 1:
+            lab_next = labels[n + 1]
+            a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
+            if a1 == 0 and a2_next == a2 + 1 and a2 != f1:
+                phones.append("]")
+
+        # アクセント句境界マーカー
+        if n < N - 1:
+            lab_next = labels[n + 1]
+            p3_next_match = _RE_PHONEME.search(lab_next)
+            if p3_next_match:
+                p3_next = p3_next_match.group(1)
+                if p3_next not in ["sil", "pau"]:
+                    a2_next = _numeric_feature_by_regex(_RE_A2, lab_next)
+                    if a2_next == 1 and a3 == 1:
+                        phones.append("#")
+
+    # 文末マーカー
+    if phones:
+        if text.endswith("?") or text.endswith("？"):
+            phones.append("?")
+        else:
+            phones.append("$")
+
+    return " ".join(phones)
+
+
 def pyopenjtalk_g2p(text: str, kana: bool = False) -> str:
     """
     日本語テキストをG2P（Grapheme-to-Phoneme）変換する。
@@ -289,7 +517,9 @@ def preprocess_japanese_text(
     Args:
         text: 入力テキスト
         mode: 変換モード
-            - "prosody": 韻律マーカー付き音素列（最高品質、推奨）
+            - "prosody": 韻律マーカー付き音素列（ESPnet方式）
+            - "prosody_extended": 拡張韻律マーカー（a1値付き、より詳細なピッチ情報）
+            - "prosody_accent": アクセント特殊トークン付き（推奨、トークナイザー拡張必要）
             - "phoneme": 音素列のみ
             - "kana": カタカナ読み
 
@@ -299,6 +529,10 @@ def preprocess_japanese_text(
     Example:
         >>> preprocess_japanese_text("こんにちは", mode="prosody")
         "^ k o [ N n i ch i w a $"
+        >>> preprocess_japanese_text("こんにちは", mode="prosody_extended")
+        "^ k<-2> o<-1> [ N<0> n<1> i<2> ch<3> i<4> w<5> a<6> $"
+        >>> preprocess_japanese_text("こんにちは", mode="prosody_accent")
+        "^ k<a-4> [ o<a-3> N<a-2> n<a-1> i<a0> ch<a1> i<a2> w<a3> a<a4> $"
         >>> preprocess_japanese_text("こんにちは", mode="phoneme")
         "k o N n i ch i w a"
         >>> preprocess_japanese_text("こんにちは", mode="kana")
@@ -306,12 +540,16 @@ def preprocess_japanese_text(
     """
     if mode == "prosody":
         return pyopenjtalk_prosody(text)
+    elif mode == "prosody_extended":
+        return pyopenjtalk_prosody_extended(text)
+    elif mode == "prosody_accent":
+        return pyopenjtalk_prosody_accent(text)
     elif mode == "phoneme":
         return pyopenjtalk_g2p(text, kana=False)
     elif mode == "kana":
         return pyopenjtalk_g2p(text, kana=True)
     else:
-        raise ValueError(f"Unknown mode: {mode}. Use 'prosody', 'phoneme', or 'kana'.")
+        raise ValueError(f"Unknown mode: {mode}. Use 'prosody', 'prosody_extended', 'prosody_accent', 'phoneme', or 'kana'.")
 
 
 # 便利なエイリアス
