@@ -10,10 +10,12 @@ pyopenjtalk_prosody関数の韻律マーカー生成を検証します。
 import pytest
 from vyvotts.utils.japanese_preprocessing import (
     pyopenjtalk_prosody,
+    pyopenjtalk_prosody_accent,
     pyopenjtalk_g2p,
     preprocess_japanese_text,
     normalize_text,
     extract_accent_features,
+    ACCENT_TOKENS,
 )
 
 
@@ -163,6 +165,85 @@ class TestProsodyMarkerRegression:
         print(f"今日は良い天気ですね。: {result}")
         assert result.startswith("^")
         assert result.endswith("$")
+
+
+class TestAccentTokens:
+    """アクセント特殊トークンのテスト"""
+
+    def test_accent_tokens_count(self):
+        """トークン数が正しいこと（-10〜15の26トークン）"""
+        assert len(ACCENT_TOKENS) == 26
+
+    def test_accent_tokens_format(self):
+        """トークンが正しい形式であること"""
+        for token in ACCENT_TOKENS:
+            assert token.startswith("<a")
+            assert token.endswith(">")
+
+    def test_accent_tokens_range(self):
+        """トークンが-10から15までの範囲を含むこと"""
+        assert "<a-10>" in ACCENT_TOKENS
+        assert "<a0>" in ACCENT_TOKENS
+        assert "<a15>" in ACCENT_TOKENS
+        assert "<a-11>" not in ACCENT_TOKENS
+        assert "<a16>" not in ACCENT_TOKENS
+
+
+class TestPyopenjtalkProsodyAccent:
+    """アクセント特殊トークン付き韻律マーカーのテスト"""
+
+    def test_sentence_markers(self):
+        """文頭・文末マーカー"""
+        result = pyopenjtalk_prosody_accent("あ")
+        assert result.startswith("^")
+        assert result.endswith("$")
+
+    def test_empty_string(self):
+        """空文字列"""
+        assert pyopenjtalk_prosody_accent("") == ""
+
+    def test_accent_token_format(self):
+        """アクセントトークンが含まれること"""
+        result = pyopenjtalk_prosody_accent("こんにちは")
+        print(f"こんにちは (prosody_accent): {result}")
+        # <a数字>形式のトークンが含まれること
+        import re
+        accent_pattern = r"<a-?\d+>"
+        matches = re.findall(accent_pattern, result)
+        assert len(matches) > 0, f"Expected accent tokens in '{result}'"
+
+    def test_accent_token_attached_to_phoneme(self):
+        """アクセントトークンが音素に付加されていること"""
+        result = pyopenjtalk_prosody_accent("あ")
+        print(f"あ (prosody_accent): {result}")
+        # 音素の直後にアクセントトークン（スペースなし）
+        import re
+        # 音素<a数字>の形式を確認
+        phoneme_accent_pattern = r"[a-zA-Z]+<a-?\d+>"
+        matches = re.findall(phoneme_accent_pattern, result)
+        assert len(matches) > 0, f"Expected phoneme+accent in '{result}'"
+
+    def test_prosody_markers_preserved(self):
+        """韻律マーカー（[, ], #）が保持されること"""
+        result = pyopenjtalk_prosody_accent("雨")
+        print(f"雨 (prosody_accent): {result}")
+        # 頭高型アクセントで [ が含まれるべき
+        assert "[" in result, f"Expected [ in '{result}'"
+
+    def test_question_marker(self):
+        """疑問文マーカー"""
+        result = pyopenjtalk_prosody_accent("何？")
+        assert result.endswith("?")
+
+    def test_preprocess_mode_prosody_accent(self):
+        """preprocess_japanese_textでprosody_accentモードが動作すること"""
+        result = preprocess_japanese_text("テスト", mode="prosody_accent")
+        import re
+        accent_pattern = r"<a-?\d+>"
+        matches = re.findall(accent_pattern, result)
+        assert len(matches) > 0, f"Expected accent tokens in '{result}'"
+        assert "^" in result
+        assert "$" in result
 
 
 if __name__ == "__main__":
