@@ -15,10 +15,16 @@ import torch
 import torch._dynamo
 import wandb
 import argparse
+import yaml
 
-# デフォルト設定（v4: アクセント特殊トークン対応）
+# デフォルト設定（v4: Option B - TTSモデルベース、アクセントを音声トークン後に配置）
+# トークン配置:
+#   - ベース語彙 (TTSモデル): 0-93,082 (93,083)
+#   - 音声トークン: 64,410-93,081 (元のTTSモデルと同じ)
+#   - アクセントトークン: 93,083-93,108 (26)
+#   - 合計: 93,109トークン
 DEFAULT_CONFIG = {
-    "dataset_path": "./moe_tokenized_accent",
+    "dataset_path": "./moe_tokenized_accent_v4",
     "model_name": "Vyvo/VyvoTTS-LFM2-Neuvillette",
     "epochs": 3,                    # 大規模データなので3エポック
     "batch_size": 16,               # RTX 4090 24GB (gradient_checkpointing=False)
@@ -26,10 +32,11 @@ DEFAULT_CONFIG = {
     "save_steps": 500,              # 高速化に伴い調整
     "warmup_steps": 200,            # 高速化に伴い調整
     "gradient_accumulation": 2,     # 4 → 2（実効バッチサイズ64維持、ステップ高速化）
-    "pad_token": 64407,
-    "save_folder": "checkpoints-lfm2-japanese-accent",
+    "pad_token": 64407,             # Same as original TTS model PAD_TOKEN
+    "save_folder": "checkpoints-lfm2-japanese-accent-v4",
     "project_name": "vyvotts-japanese-lfm2",
-    "run_name": "moe-53k-lfm2-accent",
+    "run_name": "moe-53k-lfm2-accent-v4",
+    "config_path": "vyvotts/configs/inference/lfm2_accent_v4.yaml",
 }
 
 
@@ -82,11 +89,13 @@ def main():
                         help="WandBを無効化")
     parser.add_argument("--no_compile", action="store_true",
                         help="torch.compileを無効化")
+    parser.add_argument("--config_path", type=str, default=DEFAULT_CONFIG["config_path"],
+                        help="設定ファイルのパス（AUDIO_TOKENS_START取得用）")
 
     args = parser.parse_args()
 
     print("=" * 50)
-    print("日本語ファインチューニング (v3: LFM2 MOE 53K)")
+    print("日本語ファインチューニング (v4: Option B - TTS Model Base)")
     print("=" * 50)
 
     # CUDNN最適化
@@ -131,6 +140,17 @@ def main():
         print("  Using base tokenizer: LiquidAI/LFM2-350M")
         tokenizer = AutoTokenizer.from_pretrained("LiquidAI/LFM2-350M")
 
+    # 設定ファイル読み込み（AUDIO_TOKENS_START取得用）
+    print(f"\nLoading config: {args.config_path}")
+    with open(args.config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    audio_tokens_start = config['AUDIO_TOKENS_START']
+    # SNAC codec: 7 codebooks × 4096 tokens = 28,672 audio tokens
+    num_audio_tokens = 7 * 4096
+    required_vocab_size = audio_tokens_start + num_audio_tokens
+    print(f"  AUDIO_TOKENS_START: {audio_tokens_start}")
+    print(f"  Required vocab size: {required_vocab_size}")
+
     # モデル読み込み
     print("\nLoading model...")
     model = Lfm2ForCausalLM.from_pretrained(
@@ -139,18 +159,21 @@ def main():
         attn_implementation="flash_attention_2",
     )
     print(f"Model loaded: {args.model_name}")
+    print(f"  Original vocab size: {model.config.vocab_size}")
 
-    # 埋め込み層リサイズ（拡張トークナイザー使用時）
-    if len(tokenizer) > model.config.vocab_size:
-        print(f"\nResizing embeddings: {model.config.vocab_size} -> {len(tokenizer)}")
-        model.resize_token_embeddings(len(tokenizer))
+    # 埋め込み層リサイズ（音声トークンを含む正しいサイズに）
+    if required_vocab_size > model.config.vocab_size:
+        old_vocab_size = model.config.vocab_size
+        print(f"\nResizing embeddings: {old_vocab_size} -> {required_vocab_size}")
+        model.resize_token_embeddings(required_vocab_size)
         # 新しい埋め込みを既存の平均で初期化（学習安定性向上）
         with torch.no_grad():
             embed = model.get_input_embeddings()
-            old_vocab_size = model.config.vocab_size
             mean_embedding = embed.weight[:old_vocab_size].mean(dim=0)
-            embed.weight[old_vocab_size:len(tokenizer)] = mean_embedding
+            embed.weight[old_vocab_size:required_vocab_size] = mean_embedding
         print("  New embeddings initialized with mean of existing embeddings")
+    else:
+        print(f"\nVocab size OK: {model.config.vocab_size} >= {required_vocab_size}")
 
     # torch.compileで最適化（PyTorch 2.0+）
     if not args.no_compile:

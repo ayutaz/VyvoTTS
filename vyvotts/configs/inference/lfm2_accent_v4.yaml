@@ -1,0 +1,26 @@
+# LFM2 + Accent tokens configuration (Option B: v4)
+# Keep AUDIO_TOKENS_START same as original TTS model
+# Accent tokens placed AFTER audio tokens
+#
+# Token layout:
+#   - Base vocab: 0-64,399 (64,400 tokens from LFM2)
+#   - Special tokens: 64,401-64,407 (same as original TTS model)
+#   - Audio tokens: 64,410-93,081 (28,672 tokens for SNAC codec)
+#   - Accent tokens: 93,083-93,108 (26 tokens: <a-10> to <a15>)
+#   - Total vocab with accents: 93,109 tokens
+#
+TOKENIZER_LENGTH: 64400
+START_OF_TEXT: 1
+END_OF_TEXT: 7
+START_OF_SPEECH: 64401
+END_OF_SPEECH: 64402
+START_OF_HUMAN: 64403
+END_OF_HUMAN: 64404
+START_OF_AI: 64405
+END_OF_AI: 64406
+PAD_TOKEN: 64407
+AUDIO_TOKENS_START: 64410  # Same as original TTS model
+# Accent tokens start at 93,083 (after TTS model's 93,083 vocab)
+ACCENT_TOKENS_START: 93083
+# Valid audio token range for filtering during inference
+MAX_VALID_AUDIO_TOKEN: 93081  # 64410 + 28672 - 1

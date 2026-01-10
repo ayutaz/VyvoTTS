@@ -37,8 +37,12 @@ class JapaneseInference:
         preprocess_mode: str = "prosody",
         tokenizer_path: Optional[str] = None,
     ):
-        # Load configuration
-        self.config = load_config("vyvotts/configs/inference/lfm2.yaml")
+        # Load configuration based on preprocess mode
+        if preprocess_mode == "prosody_accent":
+            # Option B (v4): Use config that preserves original AUDIO_TOKENS_START
+            self.config = load_config("vyvotts/configs/inference/lfm2_accent_v4.yaml")
+        else:
+            self.config = load_config("vyvotts/configs/inference/lfm2.yaml")
 
         # Set token constants from config
         self.TOKENIZER_LENGTH = self.config['TOKENIZER_LENGTH']
@@ -52,6 +56,8 @@ class JapaneseInference:
         self.END_OF_AI = self.config['END_OF_AI']
         self.PAD_TOKEN = self.config['PAD_TOKEN']
         self.AUDIO_TOKENS_START = self.config['AUDIO_TOKENS_START']
+        # Max valid audio token for filtering (Option B: accent tokens at 93,083+ should be filtered)
+        self.MAX_VALID_AUDIO_TOKEN = self.config.get('MAX_VALID_AUDIO_TOKEN', 93081)
 
         self.device = device
         self.preprocess_mode = preprocess_mode
@@ -186,9 +192,14 @@ class JapaneseInference:
 
         code_lists = []
         for row in processed:
-            length = row.size(0)
+            # Filter out invalid tokens (accent tokens at 93,083+ or below audio range)
+            # Only keep tokens in valid audio range: AUDIO_TOKENS_START to MAX_VALID_AUDIO_TOKEN
+            valid_tokens = [t.item() for t in row
+                           if self.AUDIO_TOKENS_START <= t.item() <= self.MAX_VALID_AUDIO_TOKEN]
+
+            length = len(valid_tokens)
             new_len = (length // 7) * 7
-            trimmed = row[:new_len]
+            trimmed = valid_tokens[:new_len]
             trimmed = [t - self.AUDIO_TOKENS_START for t in trimmed]
             code_lists.append(trimmed)
 
@@ -220,9 +231,9 @@ class JapaneseInference:
 
 def main():
     parser = argparse.ArgumentParser(description="日本語TTS推論テスト")
-    parser.add_argument("--model", type=str, default="./checkpoints-lfm2-japanese-accent",
+    parser.add_argument("--model", type=str, default="./checkpoints-lfm2-japanese-accent-v4",
                         help="モデルのパス")
-    parser.add_argument("--tokenizer_path", type=str, default="./moe_tokenized_accent/tokenizer",
+    parser.add_argument("--tokenizer_path", type=str, default="./moe_tokenized_accent_v4/tokenizer",
                         help="拡張トークナイザーのパス（prosody_accentモード用）")
     parser.add_argument("--temperature", type=float, default=0.5,
                         help="サンプリング温度（低いほど安定、デフォルト: 0.5）")

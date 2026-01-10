@@ -1,0 +1,18 @@
+# LFM2 + Accent tokens configuration
+# Base vocab: 64,400 + Accent tokens: 26 = 64,426
+# Token layout:
+#   - Base vocab: 0-64,399 (64,400 tokens)
+#   - Accent tokens: 64,400-64,425 (26 tokens: <a-10> to <a15>)
+#   - Special tokens: 64,426-64,435
+#   - Audio tokens: 64,436+
+TOKENIZER_LENGTH: 64426
+START_OF_TEXT: 1
+END_OF_TEXT: 7
+START_OF_SPEECH: 64427  # TOKENIZER_LENGTH + 1
+END_OF_SPEECH: 64428    # TOKENIZER_LENGTH + 2
+START_OF_HUMAN: 64429   # TOKENIZER_LENGTH + 3
+END_OF_HUMAN: 64430     # TOKENIZER_LENGTH + 4
+START_OF_AI: 64431      # TOKENIZER_LENGTH + 5
+END_OF_AI: 64432        # TOKENIZER_LENGTH + 6
+PAD_TOKEN: 64433        # TOKENIZER_LENGTH + 7
+AUDIO_TOKENS_START: 64436  # TOKENIZER_LENGTH + 10

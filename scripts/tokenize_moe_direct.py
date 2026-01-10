@@ -45,18 +45,25 @@ _resample_cache = {}
 
 def create_accent_tokenizer(base_model: str = "Vyvo/VyvoTTS-LFM2-Neuvillette"):
     """
-    Create tokenizer with accent special tokens.
+    Create tokenizer with accent special tokens (Option B: v4).
 
-    This allows the model to learn pitch accent patterns by treating
-    <a-8>, <a-7>, ..., <a0>, ..., <a15> as single tokens.
+    Uses the pre-trained TTS model tokenizer as base to preserve audio embeddings.
+    Accent tokens are added AFTER the audio token range.
+
+    Token layout after adding accent tokens:
+    - Base vocab (TTS model): 0-93,082 (93,083 tokens)
+    - Audio tokens: 64,410-93,081 (embedded in TTS model vocab)
+    - Accent tokens: 93,083-93,108 (26 tokens added after TTS vocab)
+    - Total vocab: 93,109 tokens
 
     Args:
-        base_model: Base model to load tokenizer from (should be TTS model with audio tokens)
+        base_model: TTS model to load tokenizer from (Vyvo/VyvoTTS-LFM2-Neuvillette)
 
     Returns:
-        Extended tokenizer with accent tokens
+        Extended tokenizer with accent tokens (vocab_size = 93,109)
     """
     tokenizer = AutoTokenizer.from_pretrained(base_model)
+    print(f"  Base TTS model vocab size: {len(tokenizer)}")
     num_added = tokenizer.add_special_tokens({'additional_special_tokens': ACCENT_TOKENS})
     print(f"  Added {num_added} accent tokens. New vocab size: {len(tokenizer)}")
     return tokenizer
@@ -255,10 +262,15 @@ def process_moe_direct(
     """
     moe_path = Path(moe_path)
 
-    # Set tokenizer and config based on model type
+    # Set tokenizer and config based on model type and preprocess mode
     if model_type == "lfm2":
-        tokenizer_model = "LiquidAI/LFM2-350M"
-        config_path = "vyvotts/configs/inference/lfm2.yaml"
+        # Use accent-specific config for prosody_accent mode (Option B: v4)
+        if preprocess_mode == "prosody_accent":
+            tokenizer_model = "Vyvo/VyvoTTS-LFM2-Neuvillette"  # TTS model for Option B
+            config_path = "vyvotts/configs/inference/lfm2_accent_v4.yaml"
+        else:
+            tokenizer_model = "LiquidAI/LFM2-350M"
+            config_path = "vyvotts/configs/inference/lfm2.yaml"
     elif model_type == "qwen3":
         tokenizer_model = "Qwen/Qwen3-0.6B"
         config_path = "vyvotts/configs/inference/qwen3.yaml"
@@ -299,11 +311,10 @@ def process_moe_direct(
     # Load text tokenizer
     print(f"Loading tokenizer: {tokenizer_model}")
     if preprocess_mode == "prosody_accent":
-        # Use TTS model (Vyvo/VyvoTTS-LFM2-Neuvillette) as base for accent tokenizer
-        # This ensures audio tokens are already in the vocabulary
-        tts_model = "Vyvo/VyvoTTS-LFM2-Neuvillette"
-        print(f"  Using TTS model for accent tokenizer: {tts_model}")
-        tokenizer = create_accent_tokenizer(tts_model)
+        # Option B: Use TTS model tokenizer and add accent tokens AFTER audio tokens
+        # This preserves pre-trained audio embeddings at positions 64,410-93,081
+        print(f"  Creating accent tokenizer from TTS model: {tokenizer_model}")
+        tokenizer = create_accent_tokenizer(tokenizer_model)
     else:
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_model)
 
